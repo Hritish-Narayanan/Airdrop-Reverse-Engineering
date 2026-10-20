@@ -22,43 +22,58 @@ pub struct DiscoverResponse {
 /// Description of a single file in POST /Ask
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskFile {
-    #[serde(rename = "FileName")]
+    #[serde(rename = "FileName", alias = "fileName")]
     pub file_name: String,
-    #[serde(rename = "FileType")]
+    #[serde(rename = "FileType", alias = "fileType")]
     pub file_type: String,
-    #[serde(rename = "FileBomPath")]
+    #[serde(rename = "FileBomPath", alias = "fileBomPath", default)]
     pub file_bom_path: String,
-    #[serde(rename = "FileIsDirectory")]
+    #[serde(rename = "FileIsDirectory", alias = "fileIsDirectory", default)]
     pub file_is_directory: bool,
-    #[serde(rename = "FileSize")]
+    #[serde(rename = "FileSize", alias = "fileSize", default)]
     pub file_size: u64,
 }
 
 /// Payload sent in POST /Ask requesting permission to send files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskRequest {
-    #[serde(rename = "SenderComputerName")]
+    #[serde(rename = "SenderComputerName", alias = "senderComputerName")]
     pub sender_computer_name: String,
-    #[serde(rename = "SenderModelName")]
+    #[serde(rename = "SenderModelName", alias = "senderModelName")]
     pub sender_model_name: String,
-    #[serde(rename = "SenderID")]
+    #[serde(rename = "SenderID", alias = "senderID", alias = "senderId")]
     pub sender_id: String,
-    #[serde(rename = "BundleID", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "BundleID", alias = "bundleID", alias = "bundleId", skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
-    #[serde(rename = "ConvertMediaFormats", default)]
+    #[serde(rename = "ConvertMediaFormats", alias = "convertMediaFormats", default)]
     pub convert_media_formats: bool,
-    #[serde(rename = "Files")]
+    #[serde(rename = "Files", alias = "files")]
     pub files: Vec<AskFile>,
-    #[serde(rename = "itemsDescription", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "itemsDescription", alias = "ItemsDescription", skip_serializing_if = "Option::is_none")]
     pub items_description: Option<String>,
 }
 
 /// Response returned from POST /Ask
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskResponse {
+    #[serde(rename = "status", alias = "Status")]
     pub status: String, // "Accepted" or "Declined"
-    #[serde(rename = "nextAttemptDelayMS", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nextAttemptDelayMS", alias = "nextAttemptDelayMs", skip_serializing_if = "Option::is_none")]
     pub next_attempt_delay_ms: Option<u64>,
+}
+
+/// Explicit Transfer State Machine
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransferState {
+    Discovering,
+    Connecting,
+    RequestingAcceptance,
+    Accepted,
+    Declined,
+    Transferring { transferred_bytes: u64, total_bytes: u64 },
+    Verifying,
+    Completed,
+    Failed(String),
 }
 
 /// Response returned from POST /Upload

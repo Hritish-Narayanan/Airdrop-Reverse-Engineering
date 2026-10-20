@@ -109,20 +109,32 @@ where
     let method = parts[0];
     let path = parts[1];
 
-    // Extract Content-Length
-    let content_length = extract_content_length(&header_str).unwrap_or(0);
-
-    // Read remaining body bytes
-    let mut body = buffer[header_end..].to_vec();
-    while body.len() < content_length {
-        let n = stream.read(&mut temp).await?;
-        if n == 0 {
-            break;
-        }
-        body.extend_from_slice(&temp[..n]);
+    // Handle Expect: 100-continue immediately if present
+    if has_expect_100_continue(&header_str) {
+        stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
+        stream.flush().await?;
     }
 
-    info!("AirDrop Request: {} {}", method, path);
+    let is_chunked_transfer = is_chunked(&header_str);
+    let mut body = buffer[header_end..].to_vec();
+
+    if is_chunked_transfer {
+        body = read_chunked_body(&mut stream, body).await?;
+    } else {
+        // Extract Content-Length
+        let content_length = extract_content_length(&header_str).unwrap_or(0);
+
+        // Read remaining body bytes
+        while body.len() < content_length {
+            let n = stream.read(&mut temp).await?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&temp[..n]);
+        }
+    }
+
+    info!("AirDrop Request: {} {} (body: {} bytes)", method, path, body.len());
 
     match path {
         "/Discover" => {
@@ -244,4 +256,120 @@ where
     );
     stream.write_all(header.as_bytes()).await?;
     Ok(())
+}
+
+fn has_expect_100_continue(headers: &str) -> bool {
+    for line in headers.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("expect") && v.to_lowercase().contains("100-continue") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_chunked(headers: &str) -> bool {
+    for line in headers.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("transfer-encoding") && v.to_lowercase().contains("chunked") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Decodes an HTTP/1.1 chunked stream from bytes into the unchunked payload.
+pub fn decode_chunked_stream(input: &[u8]) -> Result<(Vec<u8>, usize), std::io::Error> {
+    let mut decoded = Vec::new();
+    let mut cursor = 0;
+
+    loop {
+        if cursor >= input.len() {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Incomplete chunked body"));
+        }
+
+        let rest = &input[cursor..];
+        let crlf_pos = match rest.windows(2).position(|w| w == b"\r\n") {
+            Some(p) => p,
+            None => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Missing CRLF after chunk size")),
+        };
+
+        let size_str = String::from_utf8_lossy(&rest[..crlf_pos]);
+        let size_hex = size_str.split(';').next().unwrap_or("").trim();
+        let chunk_size = usize::from_str_radix(size_hex, 16)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid chunk size '{}': {}", size_hex, e)))?;
+
+        cursor += crlf_pos + 2;
+
+        if chunk_size == 0 {
+            // Final chunk
+            if cursor + 2 <= input.len() && &input[cursor..cursor + 2] == b"\r\n" {
+                cursor += 2;
+            }
+            break;
+        }
+
+        if cursor + chunk_size > input.len() {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Incomplete chunk data"));
+        }
+
+        decoded.extend_from_slice(&input[cursor..cursor + chunk_size]);
+        cursor += chunk_size;
+
+        if cursor + 2 <= input.len() && &input[cursor..cursor + 2] == b"\r\n" {
+            cursor += 2;
+        }
+    }
+
+    Ok((decoded, cursor))
+}
+
+async fn read_chunked_body<S>(stream: &mut S, mut initial_buffer: Vec<u8>) -> Result<Vec<u8>, std::io::Error>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    let mut temp = [0u8; 8192];
+    loop {
+        if let Ok((decoded, _)) = decode_chunked_stream(&initial_buffer) {
+            return Ok(decoded);
+        }
+        let n = stream.read(&mut temp).await?;
+        if n == 0 {
+            return decode_chunked_stream(&initial_buffer).map(|(d, _)| d);
+        }
+        initial_buffer.extend_from_slice(&temp[..n]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunked_decoding() {
+        let chunked_data = b"5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n";
+        let (decoded, bytes_consumed) = decode_chunked_stream(chunked_data).expect("Failed to decode");
+        assert_eq!(decoded, b"Hello World");
+        assert_eq!(bytes_consumed, chunked_data.len());
+    }
+
+    #[test]
+    fn test_expect_100_continue_detection() {
+        let headers = "POST /Upload HTTP/1.1\r\nHost: 127.0.0.1\r\nExpect: 100-continue\r\nContent-Length: 100\r\n";
+        assert!(has_expect_100_continue(headers));
+
+        let headers_normal = "POST /Upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n";
+        assert!(!has_expect_100_continue(headers_normal));
+    }
+
+    #[test]
+    fn test_is_chunked_detection() {
+        let headers = "POST /Upload HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+        assert!(is_chunked(headers));
+
+        let headers_identity = "POST /Upload HTTP/1.1\r\nContent-Length: 50\r\n\r\n";
+        assert!(!is_chunked(headers_identity));
+    }
 }

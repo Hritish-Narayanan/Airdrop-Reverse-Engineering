@@ -131,7 +131,7 @@ impl AirDropClient {
 
         let res = self.client.post(&url)
             .header(USER_AGENT, "AirDrop/1.0")
-            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_TYPE, "application/x-cpio")
             .header("X-AirDrop-Format", "cpio")
             .body(cpio_payload)
             .send()
