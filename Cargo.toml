@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/airdrop-core",
+    "crates/airdrop-cli",
+    "crates/airdrop-jni",
+]
+resolver = "2"

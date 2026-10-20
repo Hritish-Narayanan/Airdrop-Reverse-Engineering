@@ -1,0 +1,34 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Compiled native libraries and binaries
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Test run directories
+test_downloads/
+test_transfer/
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Android / Gradle build artifacts
+.gradle/
+build/
+**/build/
+local.properties
+*.apk
+*.aab
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+
+# Backup folders
+notes-example*
