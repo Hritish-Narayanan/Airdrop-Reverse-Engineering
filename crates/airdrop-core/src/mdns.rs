@@ -26,8 +26,8 @@ pub fn register_airdrop_service(
 ) -> Result<(), mdns_sd::Error> {
     let mut properties = HashMap::new();
     properties.insert("flags".to_string(), if is_everyone { "1" } else { "3" }.to_string());
-    properties.insert("airdrop".to_string(), "1.0".to_string());
     properties.insert("phash".to_string(), "0000000000000000000000000000000000000000000000000000000000000000".to_string());
+    properties.insert("model".to_string(), "Pixel".to_string());
 
     let service_type = AIRDROP_SERVICE_TYPE;
     let my_service = ServiceInfo::new(

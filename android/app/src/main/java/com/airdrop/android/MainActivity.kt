@@ -33,10 +33,13 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 
+import android.content.Intent
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var bleManager: AirDropBleManager
     private lateinit var nsdManager: AirDropNsdManager
+    private var sharedFilesState = mutableStateOf<List<File>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,14 +49,55 @@ class MainActivity : ComponentActivity() {
 
         requestRequiredPermissions()
 
+        val initialShared = extractSharedFiles(intent)
+        sharedFilesState.value = initialShared
+
         setContent {
             AirDropAppTheme {
                 AirDropScreen(
                     bleManager = bleManager,
-                    nsdManager = nsdManager
+                    nsdManager = nsdManager,
+                    sharedFilesState = sharedFilesState
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val incoming = extractSharedFiles(intent)
+        if (incoming.isNotEmpty()) {
+            sharedFilesState.value = incoming
+        }
+    }
+
+    private fun extractSharedFiles(intent: Intent?): List<File> {
+        if (intent == null) return emptyList()
+        val files = mutableListOf<File>()
+        when (intent.action) {
+            Intent.ACTION_SEND -> {
+                val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+                uri?.let { copyUriToCache(this, it)?.let { f -> files.add(f) } }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val uris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+                uris?.forEach { uri ->
+                    copyUriToCache(this, uri)?.let { f -> files.add(f) }
+                }
+            }
+        }
+        return files
     }
 
     private fun requestRequiredPermissions() {
@@ -110,18 +154,22 @@ fun AirDropAppTheme(content: @Composable () -> Unit) {
 @Composable
 fun AirDropScreen(
     bleManager: AirDropBleManager,
-    nsdManager: AirDropNsdManager
+    nsdManager: AirDropNsdManager,
+    sharedFilesState: MutableState<List<File>>
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var isReceiving by remember { mutableStateOf(false) }
+    var autoAcceptTransfers by remember { mutableStateOf(false) }
     var deviceName by remember { mutableStateOf("Android Pixel") }
-    var selectedFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    var selectedFiles by sharedFilesState
     var discoveredDevices by remember { mutableStateOf<List<DiscoveredAppleDevice>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
     var isSending by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Ready to send or receive AirDrop files.") }
+
+    var directTargetUrl by remember { mutableStateOf("192.168.29.18:8780") }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -172,7 +220,7 @@ fun AirDropScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("AirDrop Receiver Daemon", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
                             Text(
                                 if (isReceiving) "Discoverable to Apple devices" else "Receiver is inactive",
@@ -188,7 +236,7 @@ fun AirDropScreen(
                                 val downloadDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "AirDrop").apply { mkdirs() }
 
                                 if (checked) {
-                                    AirDropBridge.startServer(port, downloadDir.absolutePath, deviceName, autoAccept = true)
+                                    AirDropBridge.startServer(port, downloadDir.absolutePath, deviceName, autoAccept = autoAcceptTransfers)
                                     bleManager.startAdvertising(everyoneMode = true)
                                     nsdManager.registerService(deviceName, port)
                                     statusMessage = "Receiving active on port $port. Advertising to Apple devices."
@@ -199,6 +247,29 @@ fun AirDropScreen(
                                     statusMessage = "AirDrop receiver stopped."
                                 }
                             }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Divider(color = Color(0xFF333333))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto-Accept Transfers", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Text(
+                                if (autoAcceptTransfers) "Incoming files accepted without confirmation" else "Explicit user approval required for each transfer",
+                                color = Color.Gray,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Switch(
+                            checked = autoAcceptTransfers,
+                            onCheckedChange = { autoAcceptTransfers = it }
                         )
                     }
                 }
@@ -258,7 +329,16 @@ fun AirDropScreen(
                                 scope.launch {
                                     isScanning = true
                                     statusMessage = "Scanning for nearby AirDrop devices..."
-                                    discoveredDevices = AirDropBridge.scanForAppleDevices(timeoutSecs = 5)
+                                    val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                                    val lock = wm?.createMulticastLock("AirDropScanLock")?.apply {
+                                        setReferenceCounted(false)
+                                        acquire()
+                                    }
+                                    try {
+                                        discoveredDevices = AirDropBridge.scanForAppleDevices(timeoutSecs = 5)
+                                    } finally {
+                                        lock?.let { if (it.isHeld) it.release() }
+                                    }
                                     isScanning = false
                                     statusMessage = "Found ${discoveredDevices.size} Apple device(s)."
                                 }
@@ -272,6 +352,55 @@ fun AirDropScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Scan")
                             }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Direct AirDrop Target Input Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = directTargetUrl,
+                            onValueChange = { directTargetUrl = it },
+                            label = { Text("Target IP:Port (e.g. Mac)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isSending = true
+                                    val target = if (directTargetUrl.startsWith("http://") || directTargetUrl.startsWith("https://")) {
+                                        directTargetUrl
+                                    } else {
+                                        "https://$directTargetUrl"
+                                    }
+                                    statusMessage = "AirDropping ${selectedFiles.size} file(s) to $target..."
+                                    val paths = selectedFiles.map { it.absolutePath }
+                                    val res = AirDropBridge.sendFilesToDevice(
+                                        targetUrl = target,
+                                        files = paths,
+                                        senderName = deviceName,
+                                        senderModel = "Pixel"
+                                    )
+                                    isSending = false
+                                    if (res.success) {
+                                        statusMessage = "✅ Successfully AirDropped to $target!"
+                                        Toast.makeText(context, "AirDrop Successful!", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        statusMessage = "❌ AirDrop failed: ${res.error}"
+                                        Toast.makeText(context, "Failed: ${res.error}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            enabled = selectedFiles.isNotEmpty() && directTargetUrl.isNotBlank() && !isSending
+                        ) {
+                            Text("Send")
                         }
                     }
 

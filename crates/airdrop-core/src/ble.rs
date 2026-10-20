@@ -51,12 +51,20 @@ impl AirDropBlePayload {
                 // 8 bytes of zeros / state flags
                 body.extend_from_slice(&[0u8; 8]);
 
-                if *discoverable_by_everyone || contact_hashes.is_empty() {
+                if *discoverable_by_everyone {
                     // In Everyone mode, 8 bytes of zeroes for hashes
                     body.extend_from_slice(&[0u8; 8]);
+                } else if contact_hashes.is_empty() {
+                    // In Contacts Only mode with empty contacts, emit non-zero padding (never advertise Everyone)
+                    body.extend_from_slice(&[0xFFu8; 8]);
                 } else {
                     for hash in contact_hashes {
-                        body.extend_from_slice(&hash[..hash.len().min(3)]);
+                        if hash.len() >= 2 {
+                            body.extend_from_slice(&hash[..2]);
+                        } else if !hash.is_empty() {
+                            body.push(hash[0]);
+                            body.push(0);
+                        }
                     }
                     // Pad to 16 bytes body if needed
                     while body.len() < 16 {
@@ -112,8 +120,11 @@ impl AirDropBlePayload {
                 let contact_hashes = if is_all_zero || hashes_part.is_empty() {
                     Vec::new()
                 } else {
-                    // Extract chunks of 2 or 3 bytes
-                    hashes_part.chunks(2).map(|c| c.to_vec()).collect()
+                    hashes_part
+                        .chunks(2)
+                        .filter(|c| c != &[0xff, 0xff] && c != &[0x00, 0x00])
+                        .map(|c| c.to_vec())
+                        .collect()
                 };
 
                 Some(AirDropBlePayload::AirDrop {
@@ -157,14 +168,31 @@ mod tests {
     }
 
     #[test]
-    fn test_ble_nearby_action_encode_parse() {
-        let payload = AirDropBlePayload::NearbyAction {
-            action_type: ACTION_AIRDROP,
-            flags: 0x01,
-            auth_tag: vec![0xaa, 0xbb, 0xcc],
-        };
+    fn test_ble_contacts_mode_never_everyone() {
+        // Empty contacts list must NOT encode as Everyone
+        let payload = AirDropBlePayload::new_contacts(vec![]);
         let encoded = payload.encode();
         let parsed = AirDropBlePayload::parse(&encoded).expect("parse failed");
-        assert_eq!(parsed, payload);
+        match parsed {
+            AirDropBlePayload::AirDrop { discoverable_by_everyone, contact_hashes } => {
+                assert!(!discoverable_by_everyone, "Empty contacts mode must NOT be discoverable by everyone");
+                assert!(contact_hashes.is_empty());
+            }
+            _ => panic!("Expected AirDrop variant"),
+        }
+
+        // With actual contact hashes
+        let payload_with_hash = AirDropBlePayload::new_contacts(vec![vec![0x12, 0x34], vec![0x56, 0x78]]);
+        let enc2 = payload_with_hash.encode();
+        let parsed2 = AirDropBlePayload::parse(&enc2).expect("parse failed");
+        match parsed2 {
+            AirDropBlePayload::AirDrop { discoverable_by_everyone, contact_hashes } => {
+                assert!(!discoverable_by_everyone);
+                assert_eq!(contact_hashes.len(), 2);
+                assert_eq!(contact_hashes[0], vec![0x12, 0x34]);
+                assert_eq!(contact_hashes[1], vec![0x56, 0x78]);
+            }
+            _ => panic!("Expected AirDrop variant"),
+        }
     }
 }

@@ -41,7 +41,7 @@ class AirDropNsdManager(private val context: Context) {
         }
     }
 
-    fun registerService(deviceName: String, port: Int) {
+    fun registerService(deviceName: String, port: Int, isEveryone: Boolean = true) {
         // Acquire multicast lock so Android doesn't filter out mDNS packets
         if (multicastLock == null) {
             multicastLock = wifiManager.createMulticastLock("AirDropMulticastLock").apply {
@@ -54,7 +54,8 @@ class AirDropNsdManager(private val context: Context) {
             serviceName = "012345${String.format("%06x", port)}"
             serviceType = SERVICE_TYPE
             this.port = port
-            setAttribute("flags", "0x01")
+            setAttribute("flags", if (isEveryone) "1" else "3")
+            setAttribute("phash", "0000000000000000000000000000000000000000000000000000000000000000")
             setAttribute("model", "Pixel")
         }
 

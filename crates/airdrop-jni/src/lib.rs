@@ -237,7 +237,7 @@ pub extern "system" fn Java_com_airdrop_android_AirDropBridge_scanPeers(
     let peer_list: Vec<PeerJson> = peers
         .into_iter()
         .map(|p| {
-            let target_url = if let Some(ip) = p.ip_addresses.first() {
+            let target_url = if let Some(ip) = p.ip_addresses.iter().find(|ip| ip.is_ipv4()).or_else(|| p.ip_addresses.first()) {
                 if ip.is_ipv6() {
                     format!("https://[{}]:{}", ip, p.port)
                 } else {

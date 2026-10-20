@@ -11,6 +11,9 @@ target/
 # Test run directories
 test_downloads/
 test_transfer/
+mac_received/
+*.bin
+*.txt
 
 # macOS metadata
 .DS_Store

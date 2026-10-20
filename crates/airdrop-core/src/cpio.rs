@@ -213,18 +213,27 @@ fn parse_newc_archive(input: &[u8]) -> io::Result<Vec<CpioEntry>> {
 /// Extracts parsed CPIO entries onto the filesystem under a target base directory.
 pub fn extract_cpio_to_directory(entries: &[CpioEntry], target_dir: &Path) -> io::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(target_dir)?;
+    let target_canonical = target_dir.canonicalize()?;
     let mut written_files = Vec::new();
 
     for entry in entries {
-        // Prevent path traversal
-        let clean_name = entry.name.trim_start_matches('/').trim_start_matches("./");
-        if clean_name.contains("..") {
-            continue;
+        // Prevent null byte injection
+        if entry.name.contains('\0') {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Filename contains null byte"));
         }
 
-        let file_path = target_dir.join(clean_name);
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent)?;
+        // Prevent path traversal: take only the safe basename or relative parts without parent navigation
+        let path = Path::new(&entry.name);
+        let safe_name = match path.file_name() {
+            Some(name) => name,
+            None => continue,
+        };
+
+        let file_path = target_canonical.join(safe_name);
+
+        // Verify the path is strictly contained within target_canonical
+        if !file_path.starts_with(&target_canonical) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Path traversal attempt detected"));
         }
 
         std::fs::write(&file_path, &entry.data)?;
@@ -264,5 +273,55 @@ mod tests {
         assert_eq!(parsed[0].data, b"Hello AirDrop from Android!");
         assert_eq!(parsed[1].name, "images/sample.jpg");
         assert_eq!(parsed[1].data, vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    }
+
+    #[test]
+    fn test_extract_path_traversal_containment() {
+        let temp_dir = std::env::temp_dir().join(format!("airdrop_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let malicious_entries = vec![
+            CpioEntry {
+                name: "../../../../evil.sh".to_string(),
+                mode: 0o100755,
+                mtime: 0,
+                data: b"echo pwned".to_vec(),
+            },
+            CpioEntry {
+                name: "normal.txt".to_string(),
+                mode: 0o100644,
+                mtime: 0,
+                data: b"safe content".to_vec(),
+            },
+        ];
+
+        let extracted = extract_cpio_to_directory(&malicious_entries, &temp_dir).expect("extraction failed");
+        // Verify evil.sh was constrained to basename inside temp_dir and did NOT escape
+        for path in &extracted {
+            assert!(path.starts_with(&temp_dir.canonicalize().unwrap()));
+            assert!(!path.to_str().unwrap().contains(".."));
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_extract_null_byte_rejection() {
+        let temp_dir = std::env::temp_dir().join(format!("airdrop_null_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let null_entries = vec![
+            CpioEntry {
+                name: "evil.sh\0.txt".to_string(),
+                mode: 0o100644,
+                mtime: 0,
+                data: b"bad".to_vec(),
+            },
+        ];
+
+        let res = extract_cpio_to_directory(&null_entries, &temp_dir);
+        assert!(res.is_err(), "Null byte in filename must return Err");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

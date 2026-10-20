@@ -145,7 +145,7 @@ where
                 }
                 Err(e) => {
                     warn!("Failed to parse /Ask body: {}", e);
-                    true
+                    false
                 }
             };
 
