@@ -36,11 +36,16 @@ This matrix documents verified, partially verified, and unverified interoperabil
 | Component | Target Standard | Verification Level | Notes |
 |---|---|---|---|
 | **POSIX CPIO Archiving** | POSIX `odc` / `newc` with `TRAILER!!!` | `NATIVE AIRDROP INTEROPERABILITY VERIFIED` | Tested with binary payloads, images, and multiple files |
+| **DVZip Adaptive Compression** | `application/x-dvzip` (flate2/zlib framing) | `UNIT TESTED` | Decompresses & auto-parses compressed CPIO streams (iOS 17+/macOS 14+) |
 | **Path Traversal Containment** | Strict canonical directory containment | `UNIT TESTED`, `ANDROID DEVICE TESTED` | Rejecting `../` escaping and `\0` null-byte injections |
-| **BLE Manufacturer Data** | Company ID `0x004c`, Type `0x05` / `0x10` | `ANDROID DEVICE TESTED` | Broadcasting live on Nothing Phone A001 via Android BLE API |
-| **Bonjour / mDNS Registration** | `_airdrop._tcp.` with flags, phash, model | `NATIVE AIRDROP INTEROPERABILITY VERIFIED` | Advertised on port 8770; resolved and contacted by M1 Mac |
+| **BLE Dual Advertising** | Company ID `0x004c`, Type `0x05` + Type `0x10` | `ANDROID DEVICE TESTED` | Dual broadcasting live on Nothing Phone A001 via Android BLE API |
+| **Bonjour / mDNS Registration** | `_airdrop._tcp.` with flags, phash, model | `NATIVE AIRDROP INTEROPERABILITY VERIFIED` | Advertised on port 8770; resolved as `MacBookPro18,1` by M1 Mac |
+| **24/7 Foreground Service** | `FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE` | `ANDROID DEVICE TESTED` | Holds `MulticastLock` + `WakeLock`; receives files while screen is off |
+| **MediaStore Auto-Indexing** | `MediaStore.Images` / `MediaStore.Video` | `ANDROID DEVICE TESTED` | Received files automatically index into Google Photos & Gallery |
+| **Quick Settings Tile** | `AirDropTileService` (`QS_TILE`) | `ANDROID DEVICE TESTED` | Quick toggle from Android status bar pull-down shade |
 | **Transfer-Encoding: chunked** | HTTP/1.1 chunk-stream decoding | `UNIT TESTED`, `SOURCE VERIFIED` | Decodes hex-length chunks and terminating `0\r\n\r\n` |
 | **Expect: 100-continue** | HTTP/1.1 100 Continue prompt | `UNIT TESTED`, `SOURCE VERIFIED` | Immediate 100 Continue response prevents client upload stall |
+| **POST /Exchange Endpoint** | Apple capability handshake | `UNIT TESTED`, `SOURCE VERIFIED` | Returns AirDrop 1.0/2.0 compression capabilities |
 | **Ephemeral TLS P-256** | Self-signed ECDSA P-256 with custom verifier | `NATIVE AIRDROP INTEROPERABILITY VERIFIED` | Mutual TLS transport without unverified trust assumption |
 | **Android Sharesheet** | `ACTION_SEND`, `ACTION_SEND_MULTIPLE` | `ANDROID DEVICE TESTED` | Handled via Intent filters in `MainActivity.kt` |
 | **Recipient Consent State** | Explicit user approval toggle | `ANDROID DEVICE TESTED` | Unparsable `/Ask` requests default to Decline |

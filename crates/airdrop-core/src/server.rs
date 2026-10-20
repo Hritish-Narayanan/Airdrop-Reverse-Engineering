@@ -1,4 +1,4 @@
-use crate::cpio::{extract_cpio_to_directory, parse_cpio_archive};
+use crate::cpio::{extract_cpio_to_directory, parse_archive_auto};
 use crate::protocol::{AskRequest, AskResponse, DiscoverResponse, UploadResponse};
 use crate::tls::{create_server_config, generate_airdrop_certificate};
 use std::net::SocketAddr;
@@ -145,6 +145,18 @@ where
             };
             send_json_response(&mut stream, 200, &resp).await?;
         }
+        "/Exchange" => {
+            // Apple AirDrop /Exchange capability handshake
+            let resp = serde_json::json!({
+                "status": "success",
+                "supportedProtocols": ["AirDrop/1.0", "AirDrop/2.0"],
+                "supportedPayloadFormats": ["cpio", "dvzip"],
+                "capabilities": {
+                    "supportsCompression": true
+                }
+            });
+            send_json_response(&mut stream, 200, &resp).await?;
+        }
         "/Ask" => {
             let ask_req: Result<AskRequest, _> = parse_airdrop_payload(&body);
             let accepted = match ask_req {
@@ -169,9 +181,9 @@ where
         }
         "/Upload" => {
             info!("Received /Upload payload of {} bytes", body.len());
-            match parse_cpio_archive(&body) {
+            match parse_archive_auto(&body) {
                 Ok(entries) => {
-                    info!("Unpacking {} CPIO entries into {:?}", entries.len(), download_dir);
+                    info!("Unpacking {} CPIO/DVZip entries into {:?}", entries.len(), download_dir);
                     match extract_cpio_to_directory(&entries, &download_dir) {
                         Ok(saved) => {
                             for s in saved {

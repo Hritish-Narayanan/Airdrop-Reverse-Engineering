@@ -41,7 +41,12 @@ class AirDropNsdManager(private val context: Context) {
         }
     }
 
-    fun registerService(deviceName: String, port: Int, isEveryone: Boolean = true) {
+    fun registerService(
+        deviceName: String,
+        port: Int,
+        isEveryone: Boolean = true,
+        deviceModel: String = "MacBookPro18,1"
+    ) {
         // Acquire multicast lock so Android doesn't filter out mDNS packets
         if (multicastLock == null) {
             multicastLock = wifiManager.createMulticastLock("AirDropMulticastLock").apply {
@@ -50,13 +55,25 @@ class AirDropNsdManager(private val context: Context) {
             }
         }
 
+        // Generate persistent 12-hex virtual node ID
+        val androidId = try {
+            android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID
+            )?.take(12) ?: String.format("e0d5%08x", port)
+        } catch (e: Exception) {
+            String.format("e0d5%08x", port)
+        }
+        val nodeInstanceName = androidId.lowercase().padStart(12, '0').take(12)
+
         val serviceInfo = NsdServiceInfo().apply {
-            serviceName = "012345${String.format("%06x", port)}"
+            serviceName = nodeInstanceName
             serviceType = SERVICE_TYPE
             this.port = port
             setAttribute("flags", if (isEveryone) "1" else "3")
             setAttribute("phash", "0000000000000000000000000000000000000000000000000000000000000000")
-            setAttribute("model", "Pixel")
+            setAttribute("model", deviceModel)
+            setAttribute("dv", "1.0")
         }
 
         try {

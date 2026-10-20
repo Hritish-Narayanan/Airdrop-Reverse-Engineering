@@ -107,6 +107,10 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.CHANGE_WIFI_MULTICAST_STATE
         )
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
@@ -128,9 +132,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        bleManager.stopAdvertising()
-        nsdManager.unregisterService()
-        AirDropBridge.stopServer()
+        if (!AirDropForegroundService.isRunning.value) {
+            bleManager.stopAdvertising()
+            nsdManager.unregisterService()
+            AirDropBridge.stopServer()
+        }
     }
 }
 
@@ -160,9 +166,12 @@ fun AirDropScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var isReceiving by remember { mutableStateOf(false) }
-    var autoAcceptTransfers by remember { mutableStateOf(false) }
-    var deviceName by remember { mutableStateOf("Android Pixel") }
+    val isServiceRunning by AirDropForegroundService.isRunning.collectAsState()
+    val lastReceivedFile by AirDropForegroundService.lastReceivedFile.collectAsState()
+
+    var autoAcceptTransfers by remember { mutableStateOf(true) }
+    var deviceName by remember { mutableStateOf("Nothing Phone (A001)") }
+    var selectedModel by remember { mutableStateOf("MacBookPro18,1") }
     var selectedFiles by sharedFilesState
     var discoveredDevices by remember { mutableStateOf<List<DiscoveredAppleDevice>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
@@ -170,6 +179,13 @@ fun AirDropScreen(
     var statusMessage by remember { mutableStateOf("Ready to send or receive AirDrop files.") }
 
     var directTargetUrl by remember { mutableStateOf("192.168.29.18:8780") }
+
+    val modelOptions = listOf(
+        "MacBookPro18,1" to "MacBook Pro",
+        "iPhone15,2" to "iPhone 14 Pro",
+        "iPad13,18" to "iPad",
+        "Pixel" to "Android"
+    )
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -221,36 +237,89 @@ fun AirDropScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("AirDrop Receiver Daemon", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                            Text("AirDrop 24/7 Background Service", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
                             Text(
-                                if (isReceiving) "Discoverable to Apple devices" else "Receiver is inactive",
-                                color = if (isReceiving) Color(0xFF34C759) else Color.Gray,
+                                if (isServiceRunning) "Active in background & discoverable to Apple devices" else "Receiver is inactive",
+                                color = if (isServiceRunning) Color(0xFF34C759) else Color.Gray,
                                 fontSize = 13.sp
                             )
                         }
                         Switch(
-                            checked = isReceiving,
+                            checked = isServiceRunning,
                             onCheckedChange = { checked ->
-                                isReceiving = checked
-                                val port = 8770
                                 val downloadDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "AirDrop").apply { mkdirs() }
 
                                 if (checked) {
-                                    AirDropBridge.startServer(port, downloadDir.absolutePath, deviceName, autoAccept = autoAcceptTransfers)
-                                    bleManager.startAdvertising(everyoneMode = true)
-                                    nsdManager.registerService(deviceName, port)
-                                    statusMessage = "Receiving active on port $port. Advertising to Apple devices."
+                                    val startIntent = Intent(context, AirDropForegroundService::class.java).apply {
+                                        action = AirDropForegroundService.ACTION_START
+                                        putExtra(AirDropForegroundService.EXTRA_DEVICE_NAME, deviceName)
+                                        putExtra(AirDropForegroundService.EXTRA_DEVICE_MODEL, selectedModel)
+                                        putExtra(AirDropForegroundService.EXTRA_PORT, 8770)
+                                        putExtra(AirDropForegroundService.EXTRA_EVERYONE, true)
+                                        putExtra(AirDropForegroundService.EXTRA_DOWNLOAD_DIR, downloadDir.absolutePath)
+                                    }
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        context.startForegroundService(startIntent)
+                                    } else {
+                                        context.startService(startIntent)
+                                    }
+                                    statusMessage = "AirDrop 24/7 service active as $deviceName ($selectedModel)."
                                 } else {
-                                    bleManager.stopAdvertising()
-                                    nsdManager.unregisterService()
-                                    AirDropBridge.stopServer()
-                                    statusMessage = "AirDrop receiver stopped."
+                                    val stopIntent = Intent(context, AirDropForegroundService::class.java).apply {
+                                        action = AirDropForegroundService.ACTION_STOP
+                                    }
+                                    context.startService(stopIntent)
+                                    statusMessage = "AirDrop service stopped."
                                 }
                             }
                         )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
+                    Divider(color = Color(0xFF333333))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Apple Model Persona Selector
+                    Text("Apple Device Persona (Glyph in Share Sheet):", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Color.LightGray)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        modelOptions.forEach { (modelId, label) ->
+                            val isSelected = selectedModel == modelId
+                            Button(
+                                onClick = {
+                                    selectedModel = modelId
+                                    if (isServiceRunning) {
+                                        // Restart service with updated persona
+                                        val downloadDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "AirDrop").apply { mkdirs() }
+                                        val restartIntent = Intent(context, AirDropForegroundService::class.java).apply {
+                                            action = AirDropForegroundService.ACTION_START
+                                            putExtra(AirDropForegroundService.EXTRA_DEVICE_NAME, deviceName)
+                                            putExtra(AirDropForegroundService.EXTRA_DEVICE_MODEL, modelId)
+                                            putExtra(AirDropForegroundService.EXTRA_PORT, 8770)
+                                            putExtra(AirDropForegroundService.EXTRA_EVERYONE, true)
+                                            putExtra(AirDropForegroundService.EXTRA_DOWNLOAD_DIR, downloadDir.absolutePath)
+                                        }
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                            context.startForegroundService(restartIntent)
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primary else Color(0xFF2A2A2A),
+                                    contentColor = if (isSelected) Color.White else Color.Gray
+                                ),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(label, fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
                     Divider(color = Color(0xFF333333))
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -262,7 +331,7 @@ fun AirDropScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto-Accept Transfers", fontWeight = FontWeight.Medium, fontSize = 14.sp)
                             Text(
-                                if (autoAcceptTransfers) "Incoming files accepted without confirmation" else "Explicit user approval required for each transfer",
+                                if (autoAcceptTransfers) "Incoming files accepted without prompt" else "Prompt user for approval",
                                 color = Color.Gray,
                                 fontSize = 12.sp
                             )
@@ -271,6 +340,45 @@ fun AirDropScreen(
                             checked = autoAcceptTransfers,
                             onCheckedChange = { autoAcceptTransfers = it }
                         )
+                    }
+                }
+            }
+
+            // Received File Alert Card
+            lastReceivedFile?.let { received ->
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1B3B22)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Received via AirDrop", fontWeight = FontWeight.Bold, color = Color(0xFF34C759), fontSize = 14.sp)
+                            Text(received.name, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = Color.White)
+                            Text("${received.length() / 1024} KB • Auto-indexed to Gallery", color = Color.LightGray, fontSize = 12.sp)
+                        }
+                        Button(
+                            onClick = {
+                                val uri = MediaStoreUtils.indexReceivedFile(context, received)
+                                val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, MediaStoreUtils.inferMimeType(received.name))
+                                    flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                try {
+                                    context.startActivity(viewIntent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Saved to ${received.absolutePath}", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759))
+                        ) {
+                            Text("Open", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

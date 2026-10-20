@@ -60,6 +60,21 @@ pub extern "system" fn Java_com_airdrop_android_AirDropBridge_generateBlePayload
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_airdrop_android_AirDropBridge_generateNearbyActionPayload(
+    env: JNIEnv,
+    _class: JClass,
+    flags: jint,
+) -> jbyteArray {
+    let payload = AirDropBlePayload::new_nearby_action(flags as u8);
+    let encoded = payload.encode();
+
+    match env.byte_array_from_slice(&encoded) {
+        Ok(arr) => arr.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_airdrop_android_AirDropBridge_startReceiver(
     mut env: JNIEnv,
     _class: JClass,

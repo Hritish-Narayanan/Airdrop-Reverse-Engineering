@@ -118,3 +118,41 @@ This document records exact test commands, device parameters, outputs, and valid
   - CLI multi-file local loopback transfer
 - **Result**: **PASS** (All tests green)
 
+---
+
+## Run 7: 24/7 Background Screen-Off Transfer & MediaStore Auto-Indexing
+- **Date**: 2026-10-20
+- **Android Target**: Nothing Phone A001 (`192.168.29.229:8770`, Android 16, SDK 36) running `AirDropForegroundService`.
+- **Target State**: Screen locked in DOZE state (`mScreenState=DOZE`, screen powered off).
+- **Service Configuration**:
+  - Service Type: `FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE`
+  - Locks Held: `WifiManager.MulticastLock` + `PowerManager.WakeLock` (PARTIAL_WAKE_LOCK)
+  - Advertised Apple Persona: `MacBookPro18,1` (Apple M1 Pro 16-inch MacBook Pro)
+  - Advertised mDNS Instance: `44197d98940c._airdrop._tcp.local.`
+  - BLE Advertisements: Dual active (AirDrop Type `0x05` + NearbyAction Type `0x10`)
+- **mDNS Resolution on macOS 15**:
+  ```text
+  Lookup 44197d98940c._airdrop._tcp.local.
+  44197d98940c._airdrop._tcp.local. can be reached at Android_WTQIFE5R.local.:8770 (interface 11)
+   dv=1.0 flags=1 model=MacBookPro18,1 phash=0000000000000000000000000000000000000000000000000000000000000000
+  ```
+- **Transfer Command Executed from Mac**:
+  ```bash
+  ./target/debug/airdrop-cli send --target "192.168.29.229:8770" target/test_background.txt --name "MacBookPro18,1"
+  ```
+- **Integrity Verification**:
+  ```bash
+  shasum -a 256 target/test_background.txt
+  # 4bed871c5524929f6498e178aa91dcd008185f0559e7921d312385b3f9c8ba1d  target/test_background.txt
+
+  adb -s 0020965A9001588 shell sha256sum /storage/emulated/0/Android/data/com.airdrop.android/files/test_background.txt
+  # 4bed871c5524929f6498e178aa91dcd008185f0559e7921d312385b3f9c8ba1d  .../test_background.txt
+  ```
+- **On-Device MediaStore Auto-Indexing Logcat Trace**:
+  ```text
+  AirDropService: New file completed: test_background.txt (72 bytes)
+  MediaStoreUtils: Indexing received file test_background.txt (text/plain)
+  MediaStoreUtils: Successfully copied to MediaStore: content://media/external/downloads/1000060316
+  ```
+- **Result**: **PASS** (100% byte-for-byte SHA-256 match received while phone was locked in background with automatic MediaStore indexing).
+

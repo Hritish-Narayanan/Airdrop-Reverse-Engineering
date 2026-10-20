@@ -37,7 +37,8 @@ Status Legend:
 - [x] **[UNIT TESTED]** BLE advertisement generator (Company ID `0x004c`, Type `0x05`, Type `0x10`).
 - [x] **[UNIT TESTED]** Fix BLE contact hash list: resolved 2-byte chunk agreement and prevented empty list from advertising Everyone mode.
 - [x] **[UNIT TESTED]** Align mDNS TXT record properties between Kotlin `AirDropNsdManager` and Rust `airdrop-core`.
-- [x] **[ANDROID DEVICE TESTED]** Test Android BLE advertiser broadcasting live on Nothing Phone (A001) via Android BLE API.
+- [x] **[ANDROID DEVICE TESTED]** Test Android dual BLE advertiser broadcasting live on Nothing Phone (A001) (Type `0x05` + Type `0x10` NearbyAction).
+- [x] **[MAC TESTED]** Verify Apple device model identifier (`MacBookPro18,1`) and TXT keys resolved via macOS `dns-sd`.
 
 ### Phase 4: Identity, Trust & Recipient Consent
 - [x] **[ANDROID DEVICE TESTED]** Implement explicit recipient consent toggle in UI (defaulting to user approval required).
@@ -49,6 +50,8 @@ Status Legend:
 - [x] **[UNIT TESTED]** Implement path traversal containment (canonical containment checks rejecting `../` and null bytes).
 - [x] **[UNIT TESTED]** Implement `Transfer-Encoding: chunked` stream decoder in `server.rs`.
 - [x] **[UNIT TESTED]** Implement `Expect: 100-continue` detection and response in `server.rs`.
+- [x] **[UNIT TESTED]** Implement Apple DVZip (`application/x-dvzip`) streaming decompression and compression using `flate2`.
+- [x] **[UNIT TESTED]** Implement Apple `POST /Exchange` capability handshake in `server.rs`.
 - [x] **[NATIVE AIRDROP INTEROPERABILITY VERIFIED]** SHA-256 checksum verification: 100% byte-for-byte match on cross-device transfers.
 
 ### Phase 6: Android Application Integration
@@ -56,16 +59,21 @@ Status Legend:
 - [x] **[ANDROID DEVICE TESTED]** Verify JNI function signatures and exception safety.
 - [x] **[ANDROID DEVICE TESTED]** Build debug APK via standalone Gradle 8.7 + OpenJDK 17 LTS.
 - [x] **[ANDROID DEVICE TESTED]** Install APK on Nothing Phone (A001) using ADB (`0020965A9001588`).
-- [x] **[ANDROID DEVICE TESTED]** Validate runtime permissions (Bluetooth, Wi-Fi multicast, storage) on Android 16.
+- [x] **[ANDROID DEVICE TESTED]** Implement 24/7 `AirDropForegroundService` (`FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE`) with permanent `MulticastLock` and `WakeLock`.
+- [x] **[ANDROID DEVICE TESTED]** Implement Android Quick Settings Tile (`AirDropTileService`).
+- [x] **[ANDROID DEVICE TESTED]** Validate runtime permissions (`BLUETOOTH_ADVERTISE`, `POST_NOTIFICATIONS`, multicast lock) on Android 16.
 
 ### Phase 7: Real Apple Interoperability
 - [x] **[NATIVE AIRDROP INTEROPERABILITY VERIFIED]** Test Mac -> Android transfer over local network (`mac_binary_payload.bin`, SHA-256 verified).
 - [x] **[NATIVE AIRDROP INTEROPERABILITY VERIFIED]** Test Android -> Mac transfer over local network (`screen.png`, SHA-256 verified).
+- [x] **[NATIVE AIRDROP INTEROPERABILITY VERIFIED]** Test screen-off background transfer to Nothing Phone A001 while sleeping (`test_background.txt`, SHA-256 verified).
 - [x] **[MAC TESTED]** Record transfer throughput, logs, and SHA-256 verifications in `docs/TEST_RESULTS.md`.
 - [ ] **[BLOCKED]** Physical iPhone / iPad interoperability testing (no physical iOS hardware connected; labeled `APPLE PHYSICAL DEVICE TESTED: PENDING PHYSICAL HARDWARE`).
 
 ### Phase 8: UX & Product Quality
 - [x] **[ANDROID DEVICE TESTED]** Test Android Sharesheet intent reception (`ACTION_SEND`, `ACTION_SEND_MULTIPLE`).
+- [x] **[ANDROID DEVICE TESTED]** Implement Apple Device Persona selector (`MacBookPro18,1`, `iPhone15,2`, `iPad13,18`, `Pixel`).
+- [x] **[ANDROID DEVICE TESTED]** Implement automatic `MediaStoreUtils` indexing (transfers automatically appear in Google Photos / Gallery).
 - [x] **[ANDROID DEVICE TESTED]** Verify file selection, direct target input, and transfer status reporting in Compose UI.
 - [x] **[ANDROID DEVICE TESTED]** Capture live screenshot of on-device success state on Nothing Phone (A001).
 
@@ -77,10 +85,11 @@ Status Legend:
 ### Phase 10: Performance & Reliability
 - [x] **[NATIVE AIRDROP INTEROPERABILITY VERIFIED]** Benchmark transfer speeds for text, binary, and image payloads over Wi-Fi.
 - [x] **[UNIT TESTED]** Bounded memory consumption during streaming CPIO extraction.
+- [x] **[ANDROID DEVICE TESTED]** Zero socket stall during Android 16 background suspension via partial wake lock.
 
 ### Phase 11: Automated Continuous Validation
 - [x] **[INTEGRATION TESTED]** Create `scripts/verify_all.sh` running all unit, integration, and security tests.
-- [x] **[INTEGRATION TESTED]** 100% passing test suite across all workspace crates (12/12 unit tests passing).
+- [x] **[INTEGRATION TESTED]** 100% passing test suite across all workspace crates (17/17 unit tests passing).
 
 ### Phase 12: Release Readiness
 - [x] **[ANDROID DEVICE TESTED]** Package reproducible release build (`app-debug.apk` + cross-compiled JNI library).

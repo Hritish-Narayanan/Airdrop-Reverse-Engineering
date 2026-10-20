@@ -37,6 +37,15 @@ impl AirDropBlePayload {
         }
     }
 
+    /// Builds a Type 0x10 NearbyAction advertisement packet (AirDrop proximity beacon).
+    pub fn new_nearby_action(flags: u8) -> Self {
+        AirDropBlePayload::NearbyAction {
+            action_type: ACTION_AIRDROP,
+            flags,
+            auth_tag: Vec::new(),
+        }
+    }
+
     /// Encodes this payload into raw manufacturer data (excluding the 2-byte company ID).
     pub fn encode(&self) -> Vec<u8> {
         match self {

@@ -24,14 +24,26 @@ class AirDropBleManager(private val context: Context) {
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             super.onStartSuccess(settingsInEffect)
-            Log.i(TAG, "AirDrop BLE advertisement started successfully")
+            Log.i(TAG, "AirDrop BLE primary advertisement started successfully")
             isAdvertising = true
         }
 
         override fun onStartFailure(errorCode: Int) {
             super.onStartFailure(errorCode)
-            Log.e(TAG, "AirDrop BLE advertisement failed with error code: $errorCode")
+            Log.e(TAG, "AirDrop BLE primary advertisement failed with error code: $errorCode")
             isAdvertising = false
+        }
+    }
+
+    private val nearbyActionCallback = object : AdvertiseCallback() {
+        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+            super.onStartSuccess(settingsInEffect)
+            Log.i(TAG, "AirDrop NearbyAction (Type 0x10) BLE advertisement started successfully")
+        }
+
+        override fun onStartFailure(errorCode: Int) {
+            super.onStartFailure(errorCode)
+            Log.w(TAG, "AirDrop NearbyAction BLE advertisement failed with error code: $errorCode")
         }
     }
 
@@ -47,8 +59,8 @@ class AirDropBleManager(private val context: Context) {
             return
         }
 
+        // 1. Primary AirDrop Type 0x05 Payload
         val blePayload = AirDropBridge.getBlePayload(everyone = everyoneMode)
-
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
@@ -62,8 +74,17 @@ class AirDropBleManager(private val context: Context) {
             .addManufacturerData(APPLE_MANUFACTURER_ID, blePayload)
             .build()
 
+        // 2. Secondary NearbyAction Type 0x10 Payload (AirDrop Proximity beacon)
+        val nearbyActionPayload = AirDropBridge.getNearbyActionPayload(flags = 0x01)
+        val nearbyData = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addManufacturerData(APPLE_MANUFACTURER_ID, nearbyActionPayload)
+            .build()
+
         try {
             advertiser?.startAdvertising(settings, data, advertiseCallback)
+            advertiser?.startAdvertising(settings, nearbyData, nearbyActionCallback)
         } catch (e: SecurityException) {
             Log.e(TAG, "Missing BLUETOOTH_ADVERTISE permission: ${e.message}")
         }
@@ -73,7 +94,8 @@ class AirDropBleManager(private val context: Context) {
         if (isAdvertising && advertiser != null) {
             try {
                 advertiser?.stopAdvertising(advertiseCallback)
-                Log.i(TAG, "AirDrop BLE advertisement stopped")
+                advertiser?.stopAdvertising(nearbyActionCallback)
+                Log.i(TAG, "AirDrop BLE advertisements stopped")
             } catch (e: SecurityException) {
                 Log.e(TAG, "SecurityException while stopping advertising: ${e.message}")
             } finally {

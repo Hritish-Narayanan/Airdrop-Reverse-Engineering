@@ -1,3 +1,6 @@
+use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -210,6 +213,60 @@ fn parse_newc_archive(input: &[u8]) -> io::Result<Vec<CpioEntry>> {
     Ok(entries)
 }
 
+/// Decompresses a DVZip (application/x-dvzip) payload.
+/// Attempts Zlib decoding, then Gzip decoding, then raw Deflate decoding.
+pub fn decompress_dvzip(input: &[u8]) -> io::Result<Vec<u8>> {
+    // 1. Try Zlib
+    let mut zlib_decoder = ZlibDecoder::new(input);
+    let mut output = Vec::new();
+    if zlib_decoder.read_to_end(&mut output).is_ok() && !output.is_empty() {
+        return Ok(output);
+    }
+
+    // 2. Try Gzip
+    output.clear();
+    let mut gz_decoder = GzDecoder::new(input);
+    if gz_decoder.read_to_end(&mut output).is_ok() && !output.is_empty() {
+        return Ok(output);
+    }
+
+    // 3. Try Raw Deflate
+    output.clear();
+    let mut deflate_decoder = DeflateDecoder::new(input);
+    if deflate_decoder.read_to_end(&mut output).is_ok() && !output.is_empty() {
+        return Ok(output);
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "Failed to decompress DVZip payload: not valid zlib, gzip, or deflate stream",
+    ))
+}
+
+/// Compresses raw CPIO data into DVZip (application/x-dvzip) using zlib compression.
+pub fn compress_dvzip(input: &[u8]) -> io::Result<Vec<u8>> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(input)?;
+    encoder.finish()
+}
+
+/// Automatically detects and parses an AirDrop upload payload.
+/// Handles raw CPIO (odc or newc) as well as compressed DVZip (zlib/gzip/deflate).
+pub fn parse_archive_auto(input: &[u8]) -> io::Result<Vec<CpioEntry>> {
+    if input.starts_with(CPIO_ODC_MAGIC) || input.starts_with(b"070701") || input.starts_with(b"070702") {
+        return parse_cpio_archive(input);
+    }
+
+    // If not starting with standard CPIO magic, attempt DVZip decompression
+    match decompress_dvzip(input) {
+        Ok(decompressed) => parse_cpio_archive(&decompressed),
+        Err(_) => {
+            // Fall back to attempting direct parse
+            parse_cpio_archive(input)
+        }
+    }
+}
+
 /// Extracts parsed CPIO entries onto the filesystem under a target base directory.
 pub fn extract_cpio_to_directory(entries: &[CpioEntry], target_dir: &Path) -> io::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(target_dir)?;
@@ -323,5 +380,36 @@ mod tests {
         assert!(res.is_err(), "Null byte in filename must return Err");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_dvzip_compression_decompression_roundtrip() {
+        let original_data = b"Universal AirDrop high-volume data stream payload for Apple and Android interoperability";
+        let compressed = compress_dvzip(original_data).expect("compress_dvzip failed");
+        assert!(!compressed.is_empty());
+
+        let decompressed = decompress_dvzip(&compressed).expect("decompress_dvzip failed");
+        assert_eq!(&decompressed, original_data);
+    }
+
+    #[test]
+    fn test_parse_archive_auto_with_dvzip() {
+        let entries = vec![
+            CpioEntry {
+                name: "compressed_photo.heic".to_string(),
+                mode: 0o100644,
+                mtime: 1729441234,
+                data: vec![0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63],
+            },
+        ];
+
+        let cpio_bytes = build_cpio_archive(&entries).expect("build cpio failed");
+        let dvzip_bytes = compress_dvzip(&cpio_bytes).expect("compress dvzip failed");
+
+        // Verify parse_archive_auto transparently extracts from the DVZip payload
+        let parsed = parse_archive_auto(&dvzip_bytes).expect("parse_archive_auto failed");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "compressed_photo.heic");
+        assert_eq!(parsed[0].data, vec![0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]);
     }
 }

@@ -31,6 +31,7 @@ object AirDropBridge {
     // Native C-ABI Functions
     private external fun init()
     private external fun generateBlePayload(everyone: Boolean): ByteArray
+    private external fun generateNearbyActionPayload(flags: Int): ByteArray
     private external fun startReceiver(port: Int, downloadDir: String, name: String, autoAccept: Boolean): Boolean
     private external fun stopReceiver()
     private external fun sendFiles(targetUrl: String, filePaths: Array<String>, senderName: String, senderModel: String): String
@@ -38,6 +39,10 @@ object AirDropBridge {
 
     fun getBlePayload(everyone: Boolean = true): ByteArray {
         return generateBlePayload(everyone)
+    }
+
+    fun getNearbyActionPayload(flags: Int = 1): ByteArray {
+        return generateNearbyActionPayload(flags)
     }
 
     fun startServer(port: Int, downloadDir: String, deviceName: String, autoAccept: Boolean = true): Boolean {

@@ -20,6 +20,12 @@
     <!-- Storage Access -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
+    <!-- Foreground Service & Power Management Permissions -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/ic_menu_share"
@@ -50,6 +56,24 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <!-- 24/7 Background AirDrop Service -->
+        <service
+            android:name=".AirDropForegroundService"
+            android:exported="true"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Quick Settings Tile -->
+        <service
+            android:name=".AirDropTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_share"
+            android:label="AirDrop"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>
