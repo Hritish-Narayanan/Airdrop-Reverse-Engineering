@@ -13,7 +13,9 @@ import androidx.core.app.NotificationCompat
 object AirDropNotificationManager {
     const val CHANNEL_ID_SERVICE = "airdrop_background_service"
     const val CHANNEL_ID_TRANSFERS = "airdrop_transfers"
+    const val CHANNEL_ID_CONSENT = "airdrop_consent"
     const val NOTIFICATION_ID_SERVICE = 1001
+    const val NOTIFICATION_ID_CONSENT = 1002
     const val NOTIFICATION_ID_TRANSFER_BASE = 2000
 
     fun createNotificationChannels(context: Context) {
@@ -38,8 +40,19 @@ object AirDropNotificationManager {
                 enableVibration(true)
             }
 
+            val consentChannel = NotificationChannel(
+                CHANNEL_ID_CONSENT,
+                "AirDrop Transfer Requests",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Interactive Accept/Decline prompts for incoming AirDrop requests"
+                enableVibration(true)
+                setShowBadge(true)
+            }
+
             manager.createNotificationChannel(serviceChannel)
             manager.createNotificationChannel(transferChannel)
+            manager.createNotificationChannel(consentChannel)
         }
     }
 
@@ -120,5 +133,81 @@ object AirDropNotificationManager {
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID_TRANSFER_BASE + (System.currentTimeMillis() % 100).toInt(), notification)
+    }
+
+    fun showIncomingTransferPrompt(
+        context: Context,
+        transferId: String,
+        senderName: String,
+        fileCount: Int,
+        totalBytes: Long,
+        iconDataBase64: String? = null
+    ) {
+        val acceptIntent = Intent(context, AirDropForegroundService::class.java).apply {
+            action = AirDropForegroundService.ACTION_CONSENT_DECISION
+            putExtra(AirDropForegroundService.EXTRA_TRANSFER_ID, transferId)
+            putExtra(AirDropForegroundService.EXTRA_CONSENT_ACCEPT, true)
+        }
+        val acceptPending = PendingIntent.getService(
+            context,
+            101,
+            acceptIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val declineIntent = Intent(context, AirDropForegroundService::class.java).apply {
+            action = AirDropForegroundService.ACTION_CONSENT_DECISION
+            putExtra(AirDropForegroundService.EXTRA_TRANSFER_ID, transferId)
+            putExtra(AirDropForegroundService.EXTRA_CONSENT_ACCEPT, false)
+        }
+        val declinePending = PendingIntent.getService(
+            context,
+            102,
+            declineIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val sizeFormatted = formatFileSize(totalBytes)
+        val filesText = if (fileCount == 1) "1 item ($sizeFormatted)" else "$fileCount items ($sizeFormatted)"
+
+        val thumbnailBitmap = iconDataBase64?.let { b64 ->
+            try {
+                val decoded = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                android.graphics.BitmapFactory.decodeByteArray(decoded, 0, decoded.size)
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID_CONSENT)
+            .setContentTitle("AirDrop from \"$senderName\"")
+            .setContentText("Wants to share $filesText")
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setTimeoutAfter(30000)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePending)
+            .addAction(android.R.drawable.ic_input_add, "Accept", acceptPending)
+
+        thumbnailBitmap?.let {
+            builder.setLargeIcon(it)
+        }
+
+        val notification = builder.build()
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID_CONSENT, notification)
+    }
+
+    fun dismissConsentPrompt(context: Context) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(NOTIFICATION_ID_CONSENT)
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, units.size - 1)
+        return String.format("%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
     }
 }

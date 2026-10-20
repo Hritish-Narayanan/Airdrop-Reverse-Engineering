@@ -51,6 +51,8 @@ pub struct AskRequest {
     pub files: Vec<AskFile>,
     #[serde(rename = "itemsDescription", alias = "ItemsDescription", skip_serializing_if = "Option::is_none")]
     pub items_description: Option<String>,
+    #[serde(rename = "IconData", alias = "iconData", alias = "AssetData", alias = "assetData", skip_serializing_if = "Option::is_none")]
+    pub icon_data: Option<String>,
 }
 
 /// Response returned from POST /Ask

@@ -26,12 +26,16 @@ class AirDropForegroundService : Service() {
         private const val TAG = "AirDropService"
         const val ACTION_START = "com.airdrop.android.action.START"
         const val ACTION_STOP = "com.airdrop.android.action.STOP"
+        const val ACTION_CONSENT_DECISION = "com.airdrop.android.action.CONSENT_DECISION"
 
         const val EXTRA_DEVICE_NAME = "extra_device_name"
         const val EXTRA_DEVICE_MODEL = "extra_device_model"
         const val EXTRA_PORT = "extra_port"
         const val EXTRA_EVERYONE = "extra_everyone"
+        const val EXTRA_AUTO_ACCEPT = "extra_auto_accept"
         const val EXTRA_DOWNLOAD_DIR = "extra_download_dir"
+        const val EXTRA_TRANSFER_ID = "extra_transfer_id"
+        const val EXTRA_CONSENT_ACCEPT = "extra_consent_accept"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning = _isRunning.asStateFlow()
@@ -59,6 +63,19 @@ class AirDropForegroundService : Service() {
         bleManager = AirDropBleManager(this)
         nsdManager = AirDropNsdManager(this)
 
+        // Register incoming consent listener to display notifications
+        AirDropBridge.consentListener = { req ->
+            Log.i(TAG, "Incoming consent request from ${req.senderName} (${req.fileCount} files, ${req.totalBytes} bytes)")
+            AirDropNotificationManager.showIncomingTransferPrompt(
+                context = this,
+                transferId = req.transferId,
+                senderName = req.senderName,
+                fileCount = req.fileCount,
+                totalBytes = req.totalBytes,
+                iconDataBase64 = req.iconDataBase64
+            )
+        }
+
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AirDrop::TransferWakeLock")
 
@@ -77,17 +94,27 @@ class AirDropForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        if (action == ACTION_CONSENT_DECISION) {
+            val transferId = intent?.getStringExtra(EXTRA_TRANSFER_ID) ?: ""
+            val accept = intent?.getBooleanExtra(EXTRA_CONSENT_ACCEPT, false) ?: false
+            Log.i(TAG, "User consent response: transferId=$transferId, accept=$accept")
+            AirDropBridge.replyConsent(transferId, accept)
+            AirDropNotificationManager.dismissConsentPrompt(this)
+            return START_NOT_STICKY
+        }
+
         val deviceName = intent?.getStringExtra(EXTRA_DEVICE_NAME) ?: "Nothing Phone (A001)"
         val deviceModel = intent?.getStringExtra(EXTRA_DEVICE_MODEL) ?: "MacBookPro18,1"
         val port = intent?.getIntExtra(EXTRA_PORT, 8770) ?: 8770
         val isEveryone = intent?.getBooleanExtra(EXTRA_EVERYONE, true) ?: true
+        val autoAccept = intent?.getBooleanExtra(EXTRA_AUTO_ACCEPT, true) ?: true
         val dirPath = intent?.getStringExtra(EXTRA_DOWNLOAD_DIR)
             ?: getExternalFilesDir(null)?.absolutePath
             ?: cacheDir.absolutePath
 
         downloadDir = File(dirPath).apply { mkdirs() }
 
-        startAirDrop(deviceName, deviceModel, port, isEveryone, downloadDir!!)
+        startAirDrop(deviceName, deviceModel, port, isEveryone, autoAccept, downloadDir!!)
         return START_STICKY
     }
 
@@ -96,9 +123,10 @@ class AirDropForegroundService : Service() {
         deviceModel: String,
         port: Int,
         isEveryone: Boolean,
+        autoAccept: Boolean,
         targetDir: File
     ) {
-        Log.i(TAG, "Starting AirDrop service as '$deviceName' ($deviceModel) on port $port")
+        Log.i(TAG, "Starting AirDrop service as '$deviceName' ($deviceModel) on port $port (autoAccept=$autoAccept)")
 
         // 1. Acquire Locks
         try {
@@ -137,7 +165,7 @@ class AirDropForegroundService : Service() {
             port = port,
             downloadDir = targetDir.absolutePath,
             deviceName = deviceName,
-            autoAccept = true
+            autoAccept = autoAccept
         )
 
         // 4. Register mDNS Bonjour with Apple Model Persona
@@ -203,6 +231,7 @@ class AirDropForegroundService : Service() {
 
     private fun stopAirDrop() {
         Log.i(TAG, "Stopping AirDrop service")
+        AirDropNotificationManager.dismissConsentPrompt(this)
         fileObserver?.stopWatching()
         fileObserver = null
 

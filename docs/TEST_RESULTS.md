@@ -156,3 +156,56 @@ This document records exact test commands, device parameters, outputs, and valid
   ```
 - **Result**: **PASS** (100% byte-for-byte SHA-256 match received while phone was locked in background with automatic MediaStore indexing).
 
+---
+
+## Run 8: Asynchronous Recipient Consent, Asset Thumbnail Preview & Rejection
+- **Date**: 2026-10-20
+- **Android Target**: Nothing Phone A001 (`192.168.29.229:8770`, Android 16) with `autoAccept = false`.
+- **Sender**: Mac CLI (`airdrop-cli send`).
+- **Test 8A: Explicit Approval with Image Thumbnail Preview**:
+  - Image Payload: `/tmp/airdrop_test_photo.png` (341 bytes, 120x120 RGB PNG).
+  - Outgoing `AskRequest`: `icon_data` populated with base64 PNG preview.
+  - On-Device UI Reaction:
+    - High-priority Heads-Up Notification (`CHANNEL_ID_CONSENT`) displaying sender, item count, size, large thumbnail icon, and **[Accept]** / **[Decline]** actions with 30s timeout.
+    - Jetpack Compose Apple-styled `AlertDialog` rendering large 110dp clipped preview thumbnail, device model (`Pixel`), sender name (`Android Phone`), and **[Accept]** / **[Decline]** action buttons.
+  - User Action: Tapped **[Accept]**.
+  - CLI Output:
+    ```text
+    ✅ AirDrop transfer successful! Files received by Apple device.
+    ```
+  - Integrity Match:
+    - Mac Checksum: `82c8176b45d53e93594d2d5e4afed49e56d1f08a3cc151c972ba2f04585db181`
+    - Phone Checksum: `82c8176b45d53e93594d2d5e4afed49e56d1f08a3cc151c972ba2f04585db181`
+    - Result: **100% byte-for-byte match**.
+  - MediaStore Auto-Indexing Log:
+    ```text
+    AirDropService: New file completed: airdrop_test_photo.png (341 bytes)
+    MediaStoreUtils: Indexing received file airdrop_test_photo.png (image/png)
+    MediaStoreUtils: Successfully copied to MediaStore: content://media/external/images/media/1000060332
+    ```
+- **Test 8B: Explicit Rejection**:
+  - Payload: `/tmp/airdrop_decline_test.txt` ("This file should be declined").
+  - User Action: Tapped **[Decline]** in on-screen AirDrop consent modal.
+  - CLI Output:
+    ```text
+    ❌ Transfer failed: Transfer was declined by receiver
+    ```
+  - Storage Verification:
+    ```bash
+    adb shell ls /storage/emulated/0/Android/data/com.airdrop.android/files/Download/AirDrop/airdrop_decline_test.txt
+    # ls: .../airdrop_decline_test.txt: No such file or directory
+    ```
+  - Result: **PASS** (Zero bytes written to disk; transfer cleanly terminated).
+
+---
+
+## Run 9: Zero-Root Offline P2P Hotspot Fallback
+- **Date**: 2026-10-20
+- **Device**: Nothing Phone A001 (Android 16, API 36).
+- **Manager**: `HotspotManager` using `WifiManager.startLocalOnlyHotspot()`.
+- **Permissions**: `android.permission.CHANGE_WIFI_STATE`, `android.permission.NEARBY_WIFI_DEVICES`.
+- **Active State Verified**:
+  - SSID: `AndroidShare_3043`
+  - Dynamic WPA2 Passphrase: `xfdknzdhmcravfi`
+- **Result**: **PASS** (Zero-external Wi-Fi direct network reservation operational with live UI credentials display).
+

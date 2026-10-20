@@ -35,6 +35,7 @@ dependencies = [
 name = "airdrop-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "flate2",
  "hex",

@@ -18,6 +18,15 @@ data class TransferResult(
     val error: String?
 )
 
+data class IncomingConsentRequest(
+    val transferId: String,
+    val senderName: String,
+    val senderModel: String,
+    val fileCount: Int,
+    val totalBytes: Long,
+    val iconDataBase64: String? = null
+)
+
 object AirDropBridge {
     init {
         try {
@@ -28,14 +37,40 @@ object AirDropBridge {
         }
     }
 
+    // Reactive State for Incoming Transfer Consent
+    val incomingConsent = kotlinx.coroutines.flow.MutableStateFlow<IncomingConsentRequest?>(null)
+    var consentListener: ((IncomingConsentRequest) -> Unit)? = null
+
+    @JvmStatic
+    fun onIncomingConsent(
+        transferId: String,
+        senderName: String,
+        senderModel: String,
+        fileCount: Int,
+        totalBytes: Long,
+        iconDataBase64: String? = null
+    ) {
+        val req = IncomingConsentRequest(
+            transferId = transferId,
+            senderName = senderName,
+            senderModel = senderModel,
+            fileCount = fileCount,
+            totalBytes = totalBytes,
+            iconDataBase64 = iconDataBase64
+        )
+        incomingConsent.value = req
+        consentListener?.invoke(req)
+    }
+
     // Native C-ABI Functions
-    private external fun init()
-    private external fun generateBlePayload(everyone: Boolean): ByteArray
-    private external fun generateNearbyActionPayload(flags: Int): ByteArray
-    private external fun startReceiver(port: Int, downloadDir: String, name: String, autoAccept: Boolean): Boolean
-    private external fun stopReceiver()
-    private external fun sendFiles(targetUrl: String, filePaths: Array<String>, senderName: String, senderModel: String): String
-    private external fun scanPeers(timeoutSecs: Int): String
+    @JvmStatic private external fun init()
+    @JvmStatic private external fun generateBlePayload(everyone: Boolean): ByteArray
+    @JvmStatic private external fun generateNearbyActionPayload(flags: Int): ByteArray
+    @JvmStatic private external fun startReceiver(port: Int, downloadDir: String, name: String, autoAccept: Boolean): Boolean
+    @JvmStatic private external fun stopReceiver()
+    @JvmStatic private external fun respondToConsent(transferId: String, accept: Boolean): Boolean
+    @JvmStatic private external fun sendFiles(targetUrl: String, filePaths: Array<String>, senderName: String, senderModel: String): String
+    @JvmStatic private external fun scanPeers(timeoutSecs: Int): String
 
     fun getBlePayload(everyone: Boolean = true): ByteArray {
         return generateBlePayload(everyone)
@@ -51,6 +86,13 @@ object AirDropBridge {
 
     fun stopServer() {
         stopReceiver()
+    }
+
+    fun replyConsent(transferId: String, accept: Boolean): Boolean {
+        if (incomingConsent.value?.transferId == transferId) {
+            incomingConsent.value = null
+        }
+        return respondToConsent(transferId, accept)
     }
 
     suspend fun scanForAppleDevices(timeoutSecs: Int = 4): List<DiscoveredAppleDevice> = withContext(Dispatchers.IO) {

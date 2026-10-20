@@ -4,6 +4,7 @@ use reqwest::header::{CONTENT_TYPE, USER_AGENT};
 use std::path::Path;
 use tracing::{info, warn};
 use uuid::Uuid;
+use base64::prelude::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AirDropClientError {
@@ -156,9 +157,9 @@ impl AirDropClient {
         target_base_url: &str,
         file_paths: &[P],
     ) -> Result<(), AirDropClientError> {
-        // Step 1: Read files and build CPIO entries
-        let mut entries = Vec::new();
+        // Step 1: Read metadata first without buffering full payload in memory
         let mut ask_files = Vec::new();
+        let mut preview_icon_data: Option<String> = None;
 
         for p in file_paths {
             let path = p.as_ref();
@@ -167,9 +168,20 @@ impl AirDropClient {
                 .unwrap_or("file.dat")
                 .to_string();
 
-            let data = std::fs::read(path)?;
-            let size = data.len() as u64;
+            let metadata = std::fs::metadata(path)?;
+            let size = metadata.len();
             let file_type = infer_uti(&file_name).to_string();
+
+            // If an image and small preview not generated yet, extract thumbnail
+            if preview_icon_data.is_none() && (
+                file_name.ends_with(".png") || file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") || file_name.ends_with(".webp")
+            ) {
+                if size <= 500_000 {
+                    if let Ok(data) = std::fs::read(path) {
+                        preview_icon_data = Some(BASE64_STANDARD.encode(&data));
+                    }
+                }
+            }
 
             ask_files.push(AskFile {
                 file_name: file_name.clone(),
@@ -178,7 +190,39 @@ impl AirDropClient {
                 file_is_directory: false,
                 file_size: size,
             });
+        }
 
+        // Step 2: Discover
+        let _ = self.discover(target_base_url).await;
+
+        // Step 3: Ask
+        let ask_req = AskRequest {
+            sender_computer_name: self.computer_name.clone(),
+            sender_model_name: self.model_name.clone(),
+            sender_id: self.sender_id.clone(),
+            bundle_id: Some("com.apple.mobileslideshow".to_string()),
+            convert_media_formats: false,
+            items_description: Some(format!("{} item(s)", ask_files.len())),
+            icon_data: preview_icon_data,
+            files: ask_files,
+        };
+
+        let ask_res = self.ask(target_base_url, &ask_req).await?;
+        if ask_res.status.to_lowercase() != "accepted" {
+            info!("Transfer was declined by recipient.");
+            return Err(AirDropClientError::Declined);
+        }
+
+        // Step 4: Construct CPIO payload only after recipient consent is granted
+        let mut entries = Vec::with_capacity(file_paths.len());
+        for p in file_paths {
+            let path = p.as_ref();
+            let file_name = path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file.dat")
+                .to_string();
+
+            let data = std::fs::read(path)?;
             entries.push(CpioEntry {
                 name: file_name,
                 mode: 0o100644,
@@ -192,29 +236,11 @@ impl AirDropClient {
 
         let cpio_payload = build_cpio_archive(&entries)?;
 
-        // Step 2: Discover
-        let _ = self.discover(target_base_url).await;
-
-        // Step 3: Ask
-        let ask_req = AskRequest {
-            sender_computer_name: self.computer_name.clone(),
-            sender_model_name: self.model_name.clone(),
-            sender_id: self.sender_id.clone(),
-            bundle_id: Some("com.apple.mobileslideshow".to_string()),
-            convert_media_formats: false,
-            items_description: Some(format!("{} item(s)", ask_files.len())),
-            files: ask_files,
-        };
-
-        let ask_res = self.ask(target_base_url, &ask_req).await?;
-        if ask_res.status.to_lowercase() != "accepted" {
-            return Err(AirDropClientError::Declined);
-        }
-
-        // Step 4: Upload
+        // Step 5: Upload
         self.upload(target_base_url, cpio_payload).await?;
 
         info!("AirDrop transfer completed successfully!");
         Ok(())
     }
 }
+

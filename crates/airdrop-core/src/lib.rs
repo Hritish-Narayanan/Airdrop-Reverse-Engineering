@@ -16,5 +16,8 @@ pub use cpio::{
 };
 pub use mdns::{discover_airdrop_peers, register_airdrop_service, DiscoveredPeer};
 pub use protocol::{AskFile, AskRequest, AskResponse, DiscoverRequest, DiscoverResponse, UploadResponse};
-pub use server::{run_airdrop_server, AirDropServerConfig};
+pub use server::{
+    respond_to_consent, run_airdrop_server, set_consent_listener, AirDropServerConfig,
+    ConsentDetails,
+};
 pub use tls::{ensure_crypto_provider, generate_airdrop_certificate, AirDropCertificate};

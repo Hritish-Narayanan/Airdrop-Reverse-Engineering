@@ -2,9 +2,9 @@ use airdrop_core::{
     discover_airdrop_peers, run_airdrop_server, AirDropBlePayload, AirDropClient,
     AirDropServerConfig,
 };
-use jni::objects::{JClass, JObjectArray, JString};
-use jni::sys::{jboolean, jbyteArray, jint, jstring, JNI_FALSE, JNI_TRUE};
-use jni::JNIEnv;
+use jni::objects::{GlobalRef, JClass, JObject, JObjectArray, JString};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE, JNI_TRUE};
+use jni::{JNIEnv, JavaVM};
 use mdns_sd::ServiceDaemon;
 use serde::Serialize;
 use std::net::SocketAddr;
@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info};
 
+static JVM: Mutex<Option<JavaVM>> = Mutex::new(None);
+static BRIDGE_CLASS: Mutex<Option<GlobalRef>> = Mutex::new(None);
 static RECEIVER_SHUTDOWN: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 
 #[derive(Serialize)]
@@ -33,12 +35,70 @@ struct SendResultJson {
 
 #[no_mangle]
 pub extern "system" fn Java_com_airdrop_android_AirDropBridge_init(
-    _env: JNIEnv,
-    _class: JClass,
+    mut env: JNIEnv,
+    class: JClass,
 ) {
     let _ = tracing_subscriber::fmt::try_init();
     airdrop_core::ensure_crypto_provider();
+
+    if let Ok(vm) = env.get_java_vm() {
+        let mut guard = JVM.lock().unwrap();
+        *guard = Some(vm);
+    }
+
+    let actual_class: JObject = if let Ok(is_class) = env.is_instance_of(&class, "java/lang/Class") {
+        if is_class {
+            class.into()
+        } else if let Ok(c) = env.get_object_class(&class) {
+            c.into()
+        } else {
+            class.into()
+        }
+    } else {
+        class.into()
+    };
+
+    if let Ok(global_cls) = env.new_global_ref(actual_class) {
+        let mut guard = BRIDGE_CLASS.lock().unwrap();
+        *guard = Some(global_cls);
+    }
+
+    airdrop_core::set_consent_listener(|details| {
+        let jvm_guard = JVM.lock().unwrap();
+        let cls_guard = BRIDGE_CLASS.lock().unwrap();
+        if let (Some(jvm), Some(global_cls)) = (jvm_guard.as_ref(), cls_guard.as_ref()) {
+            if let Ok(mut env) = jvm.attach_current_thread() {
+                let cls = unsafe { JClass::from_raw(global_cls.as_raw()) };
+                if let (Ok(id), Ok(sender), Ok(model)) = (
+                    env.new_string(&details.transfer_id),
+                    env.new_string(&details.sender_name),
+                    env.new_string(&details.sender_model),
+                ) {
+                    let icon_obj: JObject = match details.icon_data.as_ref() {
+                        Some(s) => env.new_string(s).map(JObject::from).unwrap_or_else(|_| JObject::null()),
+                        None => JObject::null(),
+                    };
+                    let file_count = details.file_count as jint;
+                    let total_bytes = details.total_bytes as jlong;
+                    let _ = env.call_static_method(
+                        cls,
+                        "onIncomingConsent",
+                        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IJLjava/lang/String;)V",
+                        &[
+                            (&id).into(),
+                            (&sender).into(),
+                            (&model).into(),
+                            file_count.into(),
+                            total_bytes.into(),
+                            (&icon_obj).into(),
+                        ],
+                    );
+                }
+            }
+        }
+    });
 }
+
 
 #[no_mangle]
 pub extern "system" fn Java_com_airdrop_android_AirDropBridge_generateBlePayload(
@@ -116,6 +176,10 @@ pub extern "system" fn Java_com_airdrop_android_AirDropBridge_startReceiver(
 
     {
         let mut guard = RECEIVER_SHUTDOWN.lock().unwrap();
+        if let Some(old) = guard.take() {
+            old.store(true, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(350));
+        }
         *guard = Some(shutdown);
     }
 
@@ -150,6 +214,25 @@ pub extern "system" fn Java_com_airdrop_android_AirDropBridge_stopReceiver(
     let mut guard = RECEIVER_SHUTDOWN.lock().unwrap();
     if let Some(shutdown) = guard.take() {
         shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_airdrop_android_AirDropBridge_respondToConsent(
+    mut env: JNIEnv,
+    _class: JClass,
+    transfer_id: JString,
+    accept: jboolean,
+) -> jboolean {
+    let id_str: String = match env.get_string(&transfer_id) {
+        Ok(s) => s.into(),
+        Err(_) => return JNI_FALSE,
+    };
+
+    if airdrop_core::respond_to_consent(&id_str, accept == JNI_TRUE) {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
     }
 }
 

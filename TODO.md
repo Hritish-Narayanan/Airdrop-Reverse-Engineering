@@ -32,6 +32,7 @@ Status Legend:
 - [x] **[SOURCE VERIFIED]** Audit OWL / OpenDrop AWDL requirements against stock Android 16 kernel/SELinux.
 - [x] **[SOURCE VERIFIED]** Document AWDL vs Wi-Fi Direct vs Infrastructure LAN trade-offs in `docs/DECISIONS.md` (ADR-002).
 - [x] **[SOURCE VERIFIED]** Formulate hybrid transport architecture (Standard Wi-Fi LAN / Hotspot for zero-root consumer Android).
+- [x] **[ANDROID DEVICE TESTED]** Implement zero-root Offline P2P Hotspot fallback (`LocalOnlyHotspot`) with real-time SSID and WPA2 passphrase display.
 
 ### Phase 3: BLE & Bonjour Discovery
 - [x] **[UNIT TESTED]** BLE advertisement generator (Company ID `0x004c`, Type `0x05`, Type `0x10`).
@@ -39,9 +40,12 @@ Status Legend:
 - [x] **[UNIT TESTED]** Align mDNS TXT record properties between Kotlin `AirDropNsdManager` and Rust `airdrop-core`.
 - [x] **[ANDROID DEVICE TESTED]** Test Android dual BLE advertiser broadcasting live on Nothing Phone (A001) (Type `0x05` + Type `0x10` NearbyAction).
 - [x] **[MAC TESTED]** Verify Apple device model identifier (`MacBookPro18,1`) and TXT keys resolved via macOS `dns-sd`.
+- [x] **[ANDROID DEVICE TESTED]** Continuous Radar background auto-discovery loop with live model-aware platform badges.
 
 ### Phase 4: Identity, Trust & Recipient Consent
 - [x] **[ANDROID DEVICE TESTED]** Implement explicit recipient consent toggle in UI (defaulting to user approval required).
+- [x] **[ANDROID DEVICE TESTED]** Non-blocking asynchronous /Ask user approval with 30s timeout, system Heads-Up notification, and interactive modal.
+- [x] **[ANDROID DEVICE TESTED]** Asset thumbnail preview extraction and rendering in /Ask request modal & notification (`icon_data`).
 - [x] **[UNIT TESTED]** Fix `/Ask` parsing fallback: unparsable requests now decline rather than auto-accept.
 - [x] **[UNIT TESTED]** Ephemeral TLS (ECDSA P-256) session validation and peer identity parsing.
 

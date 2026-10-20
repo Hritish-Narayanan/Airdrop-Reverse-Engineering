@@ -16,7 +16,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -34,6 +40,9 @@ import java.io.File
 import java.io.FileOutputStream
 
 import android.content.Intent
+import android.net.wifi.WifiManager
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 class MainActivity : ComponentActivity() {
 
@@ -168,6 +177,8 @@ fun AirDropScreen(
 
     val isServiceRunning by AirDropForegroundService.isRunning.collectAsState()
     val lastReceivedFile by AirDropForegroundService.lastReceivedFile.collectAsState()
+    val pendingConsent by AirDropBridge.incomingConsent.collectAsState()
+    val hotspotInfo by HotspotManager.hotspotState.collectAsState()
 
     var autoAcceptTransfers by remember { mutableStateOf(true) }
     var deviceName by remember { mutableStateOf("Nothing Phone (A001)") }
@@ -179,6 +190,26 @@ fun AirDropScreen(
     var statusMessage by remember { mutableStateOf("Ready to send or receive AirDrop files.") }
 
     var directTargetUrl by remember { mutableStateOf("192.168.29.18:8780") }
+
+    // Continuous Live Radar auto-discovery loop
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? WifiManager
+            val lock = wm?.createMulticastLock("AirDropRadarLock")?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            try {
+                val devices = AirDropBridge.scanForAppleDevices(timeoutSecs = 2)
+                discoveredDevices = devices
+            } catch (e: Exception) {
+                // ignore
+            } finally {
+                lock?.let { if (it.isHeld) it.release() }
+            }
+            delay(3000)
+        }
+    }
 
     val modelOptions = listOf(
         "MacBookPro18,1" to "MacBook Pro",
@@ -195,6 +226,95 @@ fun AirDropScreen(
         }
         selectedFiles = tempFiles
         statusMessage = "Selected ${tempFiles.size} file(s) for AirDrop."
+    }
+
+    // Interactive Apple-grade AirDrop Consent Modal
+    pendingConsent?.let { consentReq ->
+        AlertDialog(
+            onDismissRequest = {
+                AirDropBridge.replyConsent(consentReq.transferId, false)
+                AirDropNotificationManager.dismissConsentPrompt(context)
+            },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Share,
+                    contentDescription = null,
+                    tint = Color(0xFF007AFF),
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "AirDrop",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+            },
+            text = {
+                val thumbnailBitmap = remember(consentReq.iconDataBase64) {
+                    consentReq.iconDataBase64?.let { b64 ->
+                        try {
+                            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    if (thumbnailBitmap != null) {
+                        Image(
+                            bitmap = thumbnailBitmap,
+                            contentDescription = "Preview",
+                            modifier = Modifier
+                                .size(110.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+                    Text(
+                        text = "\"${consentReq.senderName}\"",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 17.sp,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "would like to share ${consentReq.fileCount} item(s) (${consentReq.totalBytes / 1024} KB)",
+                        fontSize = 14.sp,
+                        color = Color.LightGray
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Device Model: ${consentReq.senderModel}",
+                        fontSize = 12.sp,
+                        color = Color.Gray
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        AirDropBridge.replyConsent(consentReq.transferId, true)
+                        AirDropNotificationManager.dismissConsentPrompt(context)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF34C759))
+                ) {
+                    Text("Accept", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        AirDropBridge.replyConsent(consentReq.transferId, false)
+                        AirDropNotificationManager.dismissConsentPrompt(context)
+                    }
+                ) {
+                    Text("Decline")
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -218,10 +338,12 @@ fun AirDropScreen(
             )
         }
     ) { padding ->
+        val scrollState = rememberScrollState()
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(scrollState)
                 .padding(16.dp)
         ) {
             // Receiver Card
@@ -256,6 +378,7 @@ fun AirDropScreen(
                                         putExtra(AirDropForegroundService.EXTRA_DEVICE_MODEL, selectedModel)
                                         putExtra(AirDropForegroundService.EXTRA_PORT, 8770)
                                         putExtra(AirDropForegroundService.EXTRA_EVERYONE, true)
+                                        putExtra(AirDropForegroundService.EXTRA_AUTO_ACCEPT, autoAcceptTransfers)
                                         putExtra(AirDropForegroundService.EXTRA_DOWNLOAD_DIR, downloadDir.absolutePath)
                                     }
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -292,7 +415,6 @@ fun AirDropScreen(
                                 onClick = {
                                     selectedModel = modelId
                                     if (isServiceRunning) {
-                                        // Restart service with updated persona
                                         val downloadDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "AirDrop").apply { mkdirs() }
                                         val restartIntent = Intent(context, AirDropForegroundService::class.java).apply {
                                             action = AirDropForegroundService.ACTION_START
@@ -300,6 +422,7 @@ fun AirDropScreen(
                                             putExtra(AirDropForegroundService.EXTRA_DEVICE_MODEL, modelId)
                                             putExtra(AirDropForegroundService.EXTRA_PORT, 8770)
                                             putExtra(AirDropForegroundService.EXTRA_EVERYONE, true)
+                                            putExtra(AirDropForegroundService.EXTRA_AUTO_ACCEPT, autoAcceptTransfers)
                                             putExtra(AirDropForegroundService.EXTRA_DOWNLOAD_DIR, downloadDir.absolutePath)
                                         }
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -338,7 +461,24 @@ fun AirDropScreen(
                         }
                         Switch(
                             checked = autoAcceptTransfers,
-                            onCheckedChange = { autoAcceptTransfers = it }
+                            onCheckedChange = { checked ->
+                                autoAcceptTransfers = checked
+                                if (isServiceRunning) {
+                                    val downloadDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "AirDrop").apply { mkdirs() }
+                                    val restartIntent = Intent(context, AirDropForegroundService::class.java).apply {
+                                        action = AirDropForegroundService.ACTION_START
+                                        putExtra(AirDropForegroundService.EXTRA_DEVICE_NAME, deviceName)
+                                        putExtra(AirDropForegroundService.EXTRA_DEVICE_MODEL, selectedModel)
+                                        putExtra(AirDropForegroundService.EXTRA_PORT, 8770)
+                                        putExtra(AirDropForegroundService.EXTRA_EVERYONE, true)
+                                        putExtra(AirDropForegroundService.EXTRA_AUTO_ACCEPT, checked)
+                                        putExtra(AirDropForegroundService.EXTRA_DOWNLOAD_DIR, downloadDir.absolutePath)
+                                    }
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        context.startForegroundService(restartIntent)
+                                    }
+                                }
+                            }
                         )
                     }
                 }
@@ -383,7 +523,84 @@ fun AirDropScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // Offline P2P Hotspot Card
+            Spacer(modifier = Modifier.height(12.dp))
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.WifiTethering,
+                                contentDescription = "Hotspot",
+                                tint = if (hotspotInfo != null) Color(0xFF34C759) else Color.Gray,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text("Offline P2P Hotspot", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                Text(
+                                    if (hotspotInfo != null) "Active: ${hotspotInfo!!.ssid}" else "Direct transfer with zero external Wi-Fi",
+                                    fontSize = 12.sp,
+                                    color = if (hotspotInfo != null) Color(0xFF34C759) else Color.Gray
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = hotspotInfo != null,
+                            onCheckedChange = { start ->
+                                if (start) {
+                                    HotspotManager.startHotspot(
+                                        context = context,
+                                        onSuccess = { info ->
+                                            statusMessage = "Offline Hotspot active: ${info.ssid}"
+                                            Toast.makeText(context, "Hotspot active!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        onFailure = { reason ->
+                                            statusMessage = "Failed to start Hotspot (code $reason)"
+                                            Toast.makeText(context, "Hotspot failed: $reason", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                } else {
+                                    HotspotManager.stopHotspot()
+                                    statusMessage = "Offline Hotspot stopped."
+                                }
+                            }
+                        )
+                    }
+
+                    hotspotInfo?.let { info ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = Color(0xFF252528),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("SSID: ${info.ssid}", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Color.White)
+                                if (info.passphrase != null) {
+                                    Text("Password: ${info.passphrase}", fontSize = 13.sp, color = Color(0xFF007AFF), fontWeight = FontWeight.Bold)
+                                }
+                                Text(
+                                    "Connect any Apple device to this Wi-Fi to AirDrop without any external router or internet.",
+                                    fontSize = 11.sp,
+                                    color = Color.LightGray,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             // File Selection Card
             Card(
@@ -396,14 +613,14 @@ fun AirDropScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     if (selectedFiles.isEmpty()) {
-                        Text("No files selected.", color = Color.Gray, fontSize = 14.sp)
+                        Text("No files selected. Tap below to pick photos or documents.", color = Color.Gray, fontSize = 13.sp)
                     } else {
                         selectedFiles.forEach { file ->
-                            Text("• ${file.name} (${file.length() / 1024} KB)", fontSize = 14.sp)
+                            Text("• ${file.name} (${file.length() / 1024} KB)", fontSize = 13.sp, color = Color.White)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Button(
                         onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
                         modifier = Modifier.fillMaxWidth()
@@ -415,15 +632,13 @@ fun AirDropScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Nearby Apple Devices Card
+            // Nearby Apple Devices Card (Continuous Radar)
             Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -431,41 +646,58 @@ fun AirDropScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Nearby Apple Devices", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                        Button(
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("AirDrop Radar", fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                color = Color(0xFF1B3B22),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(Color(0xFF34C759), shape = RoundedCornerShape(3.dp))
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("LIVE", color = Color(0xFF34C759), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                        IconButton(
                             onClick = {
                                 scope.launch {
                                     isScanning = true
-                                    statusMessage = "Scanning for nearby AirDrop devices..."
-                                    val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
-                                    val lock = wm?.createMulticastLock("AirDropScanLock")?.apply {
+                                    statusMessage = "Refreshing AirDrop radar..."
+                                    val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? WifiManager
+                                    val lock = wm?.createMulticastLock("AirDropManualRadar")?.apply {
                                         setReferenceCounted(false)
                                         acquire()
                                     }
                                     try {
-                                        discoveredDevices = AirDropBridge.scanForAppleDevices(timeoutSecs = 5)
+                                        discoveredDevices = AirDropBridge.scanForAppleDevices(timeoutSecs = 3)
+                                        statusMessage = "Found ${discoveredDevices.size} Apple device(s)."
                                     } finally {
                                         lock?.let { if (it.isHeld) it.release() }
+                                        isScanning = false
                                     }
-                                    isScanning = false
-                                    statusMessage = "Found ${discoveredDevices.size} Apple device(s)."
                                 }
-                            },
-                            enabled = !isScanning
+                            }
                         ) {
                             if (isScanning) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color(0xFF007AFF), strokeWidth = 2.dp)
                             } else {
-                                Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Scan")
+                                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh", tint = Color.LightGray)
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                    // Direct AirDrop Target Input Row
+                    // Direct AirDrop Target Input Row (Fallback / Direct Transfer)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -473,7 +705,7 @@ fun AirDropScreen(
                         OutlinedTextField(
                             value = directTargetUrl,
                             onValueChange = { directTargetUrl = it },
-                            label = { Text("Target IP:Port (e.g. Mac)") },
+                            label = { Text("Direct IP:Port (Mac / iPhone)") },
                             singleLine = true,
                             modifier = Modifier.weight(1f),
                             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
@@ -494,7 +726,7 @@ fun AirDropScreen(
                                         targetUrl = target,
                                         files = paths,
                                         senderName = deviceName,
-                                        senderModel = "Pixel"
+                                        senderModel = selectedModel
                                     )
                                     isSending = false
                                     if (res.success) {
@@ -518,18 +750,37 @@ fun AirDropScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(1f),
+                                .padding(vertical = 20.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                "No Apple devices found.\nMake sure target Mac/iPhone/iPad has AirDrop set to 'Everyone'.",
-                                color = Color.Gray,
-                                fontSize = 13.sp
-                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = Icons.Default.Radar,
+                                    contentDescription = null,
+                                    tint = Color.DarkGray,
+                                    modifier = Modifier.size(40.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    "Listening for Apple devices...\nSet Mac / iPhone / iPad AirDrop to 'Everyone'.",
+                                    color = Color.Gray,
+                                    fontSize = 13.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
                         }
                     } else {
-                        LazyColumn(modifier = Modifier.weight(1f)) {
-                            items(discoveredDevices) { device ->
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            discoveredDevices.forEach { device ->
+                                val (deviceIcon, platformBadge) = when {
+                                    device.instanceName.contains("Mac", ignoreCase = true) || device.hostName.contains("Mac", ignoreCase = true) ->
+                                        Pair(Icons.Default.Laptop, "macOS")
+                                    device.instanceName.contains("iPad", ignoreCase = true) || device.hostName.contains("iPad", ignoreCase = true) ->
+                                        Pair(Icons.Default.TabletMac, "iPadOS")
+                                    else ->
+                                        Pair(Icons.Default.PhoneIphone, "iOS")
+                                }
+
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -543,7 +794,7 @@ fun AirDropScreen(
                                                     targetUrl = device.targetUrl,
                                                     files = paths,
                                                     senderName = deviceName,
-                                                    senderModel = "Pixel"
+                                                    senderModel = selectedModel
                                                 )
                                                 isSending = false
                                                 if (res.success) {
@@ -564,18 +815,43 @@ fun AirDropScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.PhoneIphone,
+                                            imageVector = deviceIcon,
                                             contentDescription = "Apple Device",
                                             tint = Color(0xFF007AFF),
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(34.dp)
                                         )
                                         Spacer(modifier = Modifier.width(12.dp))
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(device.instanceName, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(device.instanceName, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Surface(
+                                                    color = Color(0xFF3A3A3C),
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        platformBadge,
+                                                        color = Color.LightGray,
+                                                        fontSize = 10.sp,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
                                             Text(device.targetUrl, color = Color.Gray, fontSize = 12.sp)
                                         }
                                         if (selectedFiles.isNotEmpty()) {
-                                            Text("Tap to Send", color = Color(0xFF007AFF), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                            Surface(
+                                                color = Color(0xFF007AFF),
+                                                shape = RoundedCornerShape(14.dp)
+                                            ) {
+                                                Text(
+                                                    "AirDrop",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }

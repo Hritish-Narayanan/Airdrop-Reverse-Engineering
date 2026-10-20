@@ -1,14 +1,52 @@
 use crate::cpio::{extract_cpio_to_directory, parse_archive_auto};
 use crate::protocol::{AskRequest, AskResponse, DiscoverResponse, UploadResponse};
 use crate::tls::{create_server_config, generate_airdrop_certificate};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
+
+/// Details of an incoming AirDrop transfer requiring user approval.
+#[derive(Debug, Clone)]
+pub struct ConsentDetails {
+    pub transfer_id: String,
+    pub sender_name: String,
+    pub sender_model: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+    pub icon_data: Option<String>,
+}
+
+static PENDING_CONSENT: Mutex<Option<HashMap<String, oneshot::Sender<bool>>>> = Mutex::new(None);
+static CONSENT_LISTENER: Mutex<Option<Box<dyn Fn(ConsentDetails) + Send + Sync>>> = Mutex::new(None);
+
+/// Registers a listener invoked whenever an incoming transfer requires user approval.
+pub fn set_consent_listener<F>(listener: F)
+where
+    F: Fn(ConsentDetails) + Send + Sync + 'static,
+{
+    let mut guard = CONSENT_LISTENER.lock().unwrap();
+    *guard = Some(Box::new(listener));
+}
+
+/// Resolves an in-flight consent request by transfer ID.
+pub fn respond_to_consent(transfer_id: &str, accept: bool) -> bool {
+    let mut guard = PENDING_CONSENT.lock().unwrap();
+    if let Some(map) = guard.as_mut() {
+        if let Some(tx) = map.remove(transfer_id) {
+            let _ = tx.send(accept);
+            return true;
+        }
+    }
+    false
+}
 
 /// AirDrop receiver server configuration.
 pub struct AirDropServerConfig {
@@ -36,6 +74,11 @@ pub async fn run_airdrop_server(
 
     while !shutdown_flag.load(Ordering::Relaxed) {
         tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
             accept_res = listener.accept() => {
                 match accept_res {
                     Ok((stream, peer_addr)) => {
@@ -165,7 +208,42 @@ where
                     for f in &req.files {
                         info!("  File: {} ({} bytes)", f.file_name, f.file_size);
                     }
-                    auto_accept
+                    if auto_accept {
+                        true
+                    } else {
+                        let transfer_id = uuid::Uuid::new_v4().to_string();
+                        let total_bytes = req.files.iter().map(|f| f.file_size).sum();
+                        let (tx, rx) = oneshot::channel();
+                        {
+                            let mut guard = PENDING_CONSENT.lock().unwrap();
+                            let map = guard.get_or_insert_with(HashMap::new);
+                            map.insert(transfer_id.clone(), tx);
+                        }
+
+                        // Trigger consent listener if registered
+                        {
+                            let listener_guard = CONSENT_LISTENER.lock().unwrap();
+                            if let Some(listener) = listener_guard.as_ref() {
+                                listener(ConsentDetails {
+                                    transfer_id: transfer_id.clone(),
+                                    sender_name: req.sender_computer_name.clone(),
+                                    sender_model: req.sender_model_name.clone(),
+                                    file_count: req.files.len(),
+                                    total_bytes,
+                                    icon_data: req.icon_data.clone(),
+                                });
+                            }
+                        }
+
+                        // Wait up to 30s for user response
+                        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+                            Ok(Ok(user_decision)) => user_decision,
+                            _ => {
+                                warn!("Consent prompt timed out or cancelled for transfer {}", transfer_id);
+                                false
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to parse /Ask body: {}", e);
