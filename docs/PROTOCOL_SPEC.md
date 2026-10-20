@@ -19,7 +19,7 @@ Derived from static & runtime analysis of macOS `sharingd` (Mach-O arm64e), Open
 | **REST: POST /Upload** | Implemented | **CONFIRMED** | Raw streaming archive |
 | **Container: POSIX CPIO** | Implemented | **CONFIRMED** | Standard `odc`/`newc` archive ending with `TRAILER!!!` |
 | **Container: DVZip / BOM** | In Progress | **UNDER INVESTIGATION** | Newer iOS 17+ adaptive compression framing |
-| **Binary Property Lists (bplist)**| Planned | **STRONG HYPOTHESIS** | Older macOS/iOS accept or send bplist in `/Ask` |
+| **Binary Property Lists (bplist)**| Implemented | **CONFIRMED & UNIT TESTED** | Automatic `bplist00`, XML plist, and JSON payload deserialization |
 
 ---
 

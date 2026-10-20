@@ -78,3 +78,20 @@ Binary analysis of `sharingd` revealed the following exact content types and arc
 
 ### Path Traversal Defense:
 All CPIO entry filenames must be strictly validated against canonical target directory containment. Any entry containing null bytes (`\0`) or path separators escaping the download directory must be rejected.
+
+---
+
+## 4. Multi-Format Serialization (bplist00, XML Plist, JSON)
+
+Apple operating systems utilize different serialization formats across major releases:
+- **Legacy iOS / macOS (iOS 7–12, OS X Yosemite–Catalina)**: Exclusively encode `/Ask` requests as Apple Binary Property Lists (`bplist00`).
+- **Modern iOS / macOS (iOS 13–18, macOS Big Sur–Sequoia)**: Primarily encode as JSON or `bplist00` depending on whether Swift `Codable` or Objective-C `NSPropertyListSerialization` path is invoked.
+
+### Implementation Solution:
+Our receiver introduces [`parse_airdrop_payload`](file:///Users/hritish/Documents/REA/crates/airdrop-core/src/server.rs):
+1. Inspects leading magic bytes:
+   - If payload begins with `bplist00`, it deserializes via `plist::from_bytes`.
+   - If payload begins with `<?xml` or `<!DOCTYPE plist`, it deserializes via XML plist parser.
+   - Otherwise, it deserializes as standard JSON via `serde_json::from_slice`.
+2. Tested and verified against synthetic binary plists generated via `plist::to_writer_binary`, XML plists, and JSON dictionaries in `server::tests::test_parse_airdrop_payload_*`.
+

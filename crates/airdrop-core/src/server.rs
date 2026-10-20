@@ -146,7 +146,7 @@ where
             send_json_response(&mut stream, 200, &resp).await?;
         }
         "/Ask" => {
-            let ask_req: Result<AskRequest, _> = serde_json::from_slice(&body);
+            let ask_req: Result<AskRequest, _> = parse_airdrop_payload(&body);
             let accepted = match ask_req {
                 Ok(req) => {
                     info!("Incoming AirDrop from '{}' with {} files", req.sender_computer_name, req.files.len());
@@ -343,9 +343,40 @@ where
     }
 }
 
+/// Parses an incoming payload whether it is encoded as a Binary Plist (bplist00), XML Plist, or JSON.
+pub fn parse_airdrop_payload<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, serde_json::Error> {
+    if body.is_empty() {
+        return serde_json::from_str("{}");
+    }
+
+    // 1. Check for Apple binary property list magic "bplist00"
+    if body.starts_with(b"bplist00") {
+        match plist::from_bytes(body) {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                warn!("bplist parsing failed: {}", e);
+            }
+        }
+    }
+
+    // 2. Check for XML plist "<?xml" or "<!DOCTYPE plist"
+    if body.starts_with(b"<?xml") || body.starts_with(b"<!DOCTYPE plist") {
+        match plist::from_bytes(body) {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                warn!("xml plist parsing failed: {}", e);
+            }
+        }
+    }
+
+    // 3. Fallback to standard JSON
+    serde_json::from_slice(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::AskRequest;
 
     #[test]
     fn test_chunked_decoding() {
@@ -371,5 +402,54 @@ mod tests {
 
         let headers_identity = "POST /Upload HTTP/1.1\r\nContent-Length: 50\r\n\r\n";
         assert!(!is_chunked(headers_identity));
+    }
+
+    #[test]
+    fn test_parse_airdrop_payload_json() {
+        let json_body = br#"{"SenderComputerName":"MacBook","SenderModelName":"MacBookAir","SenderID":"1234","Files":[]}"#;
+        let req: AskRequest = parse_airdrop_payload(json_body).expect("Failed to parse JSON AskRequest");
+        assert_eq!(req.sender_computer_name, "MacBook");
+        assert_eq!(req.sender_model_name, "MacBookAir");
+    }
+
+    #[test]
+    fn test_parse_airdrop_payload_binary_plist() {
+        // Create a plist dictionary and serialize to binary plist
+        let mut dict = plist::Dictionary::new();
+        dict.insert("SenderComputerName".to_string(), plist::Value::String("iPhone 15".to_string()));
+        dict.insert("SenderModelName".to_string(), plist::Value::String("iPhone15,2".to_string()));
+        dict.insert("SenderID".to_string(), plist::Value::String("uuid-test".to_string()));
+        dict.insert("Files".to_string(), plist::Value::Array(vec![]));
+
+        let mut bplist_bytes = Vec::new();
+        plist::to_writer_binary(&mut bplist_bytes, &plist::Value::Dictionary(dict)).expect("to binary plist");
+        assert!(bplist_bytes.starts_with(b"bplist00"));
+
+        let req: AskRequest = parse_airdrop_payload(&bplist_bytes).expect("Failed to parse bplist AskRequest");
+        assert_eq!(req.sender_computer_name, "iPhone 15");
+        assert_eq!(req.sender_model_name, "iPhone15,2");
+        assert_eq!(req.sender_id, "uuid-test");
+    }
+
+    #[test]
+    fn test_parse_airdrop_payload_xml_plist() {
+        let xml_plist = br#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>SenderComputerName</key>
+    <string>iPad Pro</string>
+    <key>SenderModelName</key>
+    <string>iPad13,8</string>
+    <key>SenderID</key>
+    <string>ipad-uuid</string>
+    <key>Files</key>
+    <array/>
+</dict>
+</plist>"#;
+
+        let req: AskRequest = parse_airdrop_payload(xml_plist).expect("Failed to parse XML plist AskRequest");
+        assert_eq!(req.sender_computer_name, "iPad Pro");
+        assert_eq!(req.sender_model_name, "iPad13,8");
     }
 }
